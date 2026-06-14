@@ -1,0 +1,6 @@
+{
+  "name": "Boss Furniture QR Scanner",
+  "description": "Scan furniture QR codes, manage offline queues, and track outgoing shipments automatically in a central Google Sheet.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

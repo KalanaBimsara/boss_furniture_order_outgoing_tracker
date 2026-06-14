@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    
+    <!-- F inside B, golden color -->
+    <path
+        android:fillColor="#FFD700"
+        android:pathData="M240,880L240,760L160,760Q126.5,760 103.25,736.75Q80,713.5 80,680L80,520Q80,486.5 103.25,463.25Q126.5,440 160,440L800,440Q833.5,440 856.75,463.25Q880,486.5 880,520L880,680Q880,713.5 856.75,736.75Q833.5,760 800,760L720,760L720,880L640,880L640,760L320,760L320,880L240,880ZM160,680L800,680L800,520L160,520L160,680ZM320,440L320,240Q320,173.5 366.75,126.75Q413.5,80 480,80Q546.5,80 593.25,126.75Q640,173.5 640,240L640,440L560,440L560,240Q560,206.5 536.75,183.25Q513.5,160 480,160Q446.5,160 423.25,183.25Q400,206.5 400,240L400,440L320,440ZM160,680L160,520L160,680Z"/>
+        
+    <!-- Text BOSS approximation -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M250,700 L300,700 A25,25 0 0 1 325,725 A25,25 0 0 1 300,750 L250,750 Z M350,700 L400,700 A25,25 0 0 1 425,725 A25,25 0 0 1 400,750 L350,750 Z"/>
+    
+    <!-- Table SVG -->
+    <path
+        android:fillColor="#F5DEB3"
+        android:pathData="M300,500 L660,500 L680,600 L280,600 Z"/>
+    <path
+        android:fillColor="#D2B48C"
+        android:pathData="M300,600 L320,600 L320,650 L300,650 Z M640,600 L660,600 L660,650 L640,650 Z"/>
+        
+</vector>
