@@ -11,6 +11,9 @@ interface ScannedRecordDao {
     @Query("SELECT * FROM scanned_records WHERE syncStatus = 'PENDING' ORDER BY scannedAt ASC")
     suspend fun getPendingRecords(): List<ScannedRecord>
 
+    @Query("SELECT * FROM scanned_records WHERE LOWER(orderNo) = LOWER(:orderNo) ORDER BY scannedAt DESC")
+    suspend fun getRecordsByOrderNo(orderNo: String): List<ScannedRecord>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecord(record: ScannedRecord): Long
 

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for integrating Supabase factory database backend, dual-mode operation (Dispatch Mode vs. Return Mode) with color-coded segmented top switcher, and manual order number return entry.",
+  "updatedAt":  "2026-10-25T16:28:44.329449850Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
