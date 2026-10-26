@@ -1,8 +1,6 @@
 package com.example.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -19,7 +17,6 @@ data class FactoryColors(
     val success: Color,
     val warning: Color,
     val danger: Color,
-    /** Content colour drawn on top of a solid accent fill. */
     val onAccent: Color,
     val cameraBackdrop: Color
 )
@@ -28,20 +25,10 @@ private val LightFactoryColors = FactoryColors(
     dispatch = DispatchIndigo,
     returns = ReturnAmber,
     success = RestockedEmerald,
-    warning = WarningOrange,
-    danger = DangerRed,
+    warning = OfflineOrange,
+    danger = DuplicateRed,
     onAccent = Neutral0,
     cameraBackdrop = Neutral900
-)
-
-private val DarkFactoryColors = FactoryColors(
-    dispatch = DispatchIndigoDark,
-    returns = ReturnAmberDark,
-    success = RestockedEmeraldDark,
-    warning = WarningOrangeDark,
-    danger = DangerRedDark,
-    onAccent = Neutral950,
-    cameraBackdrop = Neutral950
 )
 
 private val LocalFactoryColors = staticCompositionLocalOf { LightFactoryColors }
@@ -53,75 +40,43 @@ object FactoryTheme {
         get() = LocalFactoryColors.current
 }
 
-private val DarkColorScheme = darkColorScheme(
-    primary = DispatchIndigoDark,
-    onPrimary = Neutral950,
-    primaryContainer = Color(0xFF2A2B5C),
-    onPrimaryContainer = Color(0xFFE0E0FF),
-    secondary = Neutral400,
-    onSecondary = Neutral950,
-    secondaryContainer = Neutral800,
-    onSecondaryContainer = Neutral100,
-    tertiary = ReturnAmberDark,
-    background = Neutral950,
-    onBackground = Neutral50,
-    surface = Neutral900,
-    onSurface = Neutral50,
-    surfaceVariant = Neutral850,
-    onSurfaceVariant = Neutral400,
-    surfaceContainerLowest = Neutral950,
-    surfaceContainerLow = Neutral900,
-    surfaceContainer = Neutral900,
-    surfaceContainerHigh = Neutral850,
-    surfaceContainerHighest = Neutral800,
-    outline = Neutral700,
-    outlineVariant = Neutral800,
-    error = DangerRedDark,
-    onError = Neutral950,
-    errorContainer = Color(0xFF3B1517),
-    onErrorContainer = Color(0xFFFFDAD6)
-)
-
-private val LightColorScheme = lightColorScheme(
+private val IosLightColorScheme = lightColorScheme(
     primary = DispatchIndigo,
     onPrimary = Neutral0,
-    primaryContainer = Color(0xFFEDEDFF),
-    onPrimaryContainer = Color(0xFF1E1A78),
-    secondary = Neutral500,
+    primaryContainer = DispatchIndigoTint,
+    onPrimaryContainer = DispatchIndigoText,
+    secondary = SecondaryLabel,
     onSecondary = Neutral0,
-    secondaryContainer = Neutral100,
-    onSecondaryContainer = Neutral700,
+    secondaryContainer = TertiaryFill,
+    onSecondaryContainer = Neutral900,
     tertiary = ReturnAmber,
-    background = Neutral50,
+    background = GroupedBg,
     onBackground = Neutral900,
-    surface = Neutral0,
+    surface = CellWhite,
     onSurface = Neutral900,
-    surfaceVariant = Neutral100,
-    onSurfaceVariant = Neutral500,
-    surfaceContainerLowest = Neutral0,
-    surfaceContainerLow = Neutral0,
-    surfaceContainer = Neutral0,
-    surfaceContainerHigh = Neutral0,
-    surfaceContainerHighest = Neutral100,
-    outline = Neutral300,
+    surfaceVariant = TertiaryFill,
+    onSurfaceVariant = SecondaryLabel,
+    surfaceContainerLowest = CellWhite,
+    surfaceContainerLow = GroupedBg,
+    surfaceContainer = CellWhite,
+    surfaceContainerHigh = CellWhite,
+    surfaceContainerHighest = TertiaryFill,
+    outline = SeparatorHairline,
     outlineVariant = Neutral200,
-    error = DangerRed,
+    error = DuplicateRed,
     onError = Neutral0,
-    errorContainer = Color(0xFFFEF2F2),
-    onErrorContainer = Color(0xFF7F1D1D)
+    errorContainer = DuplicateRedTint,
+    onErrorContainer = DuplicateRed
 )
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    val factoryColors = if (darkTheme) DarkFactoryColors else LightFactoryColors
-
-    CompositionLocalProvider(LocalFactoryColors provides factoryColors) {
+    CompositionLocalProvider(LocalFactoryColors provides LightFactoryColors) {
         MaterialTheme(
-            colorScheme = colorScheme,
+            colorScheme = IosLightColorScheme,
             typography = Typography,
             shapes = AppShapes,
             content = content

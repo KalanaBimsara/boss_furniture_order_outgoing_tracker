@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -7,34 +8,43 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun CameraScannerView(
     modifier: Modifier = Modifier,
+    torchEnabled: Boolean = false,
     onQrScanned: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val cameraExecutor = remember { kotlinx.coroutines.Dispatchers.Default.asExecutor() }
+    val cameraExecutor = remember { Dispatchers.Default.asExecutor() }
     var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var cameraRef by remember { mutableStateOf<Camera?>(null) }
     var scannerRef by remember { mutableStateOf<com.google.mlkit.vision.barcode.BarcodeScanner?>(null) }
-    val isDisposed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val isDisposed = remember { AtomicBoolean(false) }
+
+    LaunchedEffect(torchEnabled, cameraRef) {
+        try {
+            cameraRef?.cameraControl?.enableTorch(torchEnabled)
+        } catch (_: Exception) {}
+    }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
@@ -116,12 +126,16 @@ fun CameraScannerView(
                         }
 
                     cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
+                    val cam = cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
                         imageAnalysis
                     )
+                    cameraRef = cam
+                    try {
+                        cam.cameraControl.enableTorch(torchEnabled)
+                    } catch (_: Exception) {}
                 } catch (exc: Exception) {
                     exc.printStackTrace()
                 }
