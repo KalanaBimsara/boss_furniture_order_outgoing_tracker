@@ -54,17 +54,30 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'bossfurniture123' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'bossfurniture123' }}
         run: |
-          # Ensure debug.keystore exists from debug.keystore.base64
-          if [ ! -f "debug.keystore" ] && [ -f "debug.keystore.base64" ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+          # 1. Always ensure debug.keystore exists in project root for signingConfigs.debugConfig
+          if [ ! -f "${{ github.workspace }}/debug.keystore" ]; then
+            if [ -s "${{ github.workspace }}/debug.keystore.base64" ]; then
+              base64 -d "${{ github.workspace }}/debug.keystore.base64" > "${{ github.workspace }}/debug.keystore"
+            else
+              keytool -genkeypair -v \
+                -keystore "${{ github.workspace }}/debug.keystore" \
+                -alias androiddebugkey \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -storepass android \
+                -keypass android \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
           fi
+          ls -lh "${{ github.workspace }}/debug.keystore"
 
-          # Prepare release keystore (use GitHub Secret if configured, otherwise generate upload key)
+          # 2. Always ensure my-upload-key.jks exists in project root for signingConfigs.release
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > my-upload-key.jks
-          elif [ ! -f "my-upload-key.jks" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/my-upload-key.jks"
+          elif [ ! -f "${{ github.workspace }}/my-upload-key.jks" ]; then
             keytool -genkeypair -v \
-              -keystore my-upload-key.jks \
+              -keystore "${{ github.workspace }}/my-upload-key.jks" \
               -alias upload \
               -keyalg RSA \
               -keysize 2048 \
@@ -73,10 +86,15 @@ jobs:
               -keypass "$KEY_PASSWORD" \
               -dname "CN=Boss Furniture, OU=Factory Dispatch, O=Boss Furniture, L=Colombo, ST=Western, C=LK"
           fi
+          ls -lh "${{ github.workspace }}/my-upload-key.jks"
 
-          # Ensure .env exists for Secrets Gradle Plugin
-          if [ ! -f ".env" ] && [ -f ".env.example" ]; then
-            cp .env.example .env
+          # 3. Ensure .env exists for Secrets Gradle Plugin
+          if [ ! -f "${{ github.workspace }}/.env" ]; then
+            if [ -f "${{ github.workspace }}/.env.example" ]; then
+              cp "${{ github.workspace }}/.env.example" "${{ github.workspace }}/.env"
+            else
+              echo "GEMINI_API_KEY=" > "${{ github.workspace }}/.env"
+            fi
           fi
 
       - name: Build Debug & Release APKs
@@ -84,8 +102,10 @@ jobs:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'bossfurniture123' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'bossfurniture123' }}
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
         run: |
-          gradle assembleDebug assembleRelease --no-daemon
+          gradle assembleDebug -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
+          gradle assembleRelease -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
 
       - name: Prepare Release APK Files
         run: |
