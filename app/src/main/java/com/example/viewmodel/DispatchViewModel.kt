@@ -221,11 +221,10 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             val records = pair.first.first
             val query = pair.first.second
 
-            val todayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val todayStr = todayFormat.format(Date())
+            val todayStr = DispatchRepository.formatSriLankaDateOnly()
 
             val filteredByToday = records.filter {
-                todayFormat.format(Date(it.scannedAt)) == todayStr
+                DispatchRepository.formatSriLankaDateOnly(it.scannedAt) == todayStr
             }
 
             val modeFiltered = if (modeFilter == "ALL") {
@@ -332,9 +331,9 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
     fun getAssignedDeliverySummary(): String {
         val effective = getEffectiveVehicleNumber()
-        return when (val uuid = DispatchRepository.resolveKnownDriverUuid(effective)) {
-            DRIVER_UUID_RATHNAYAKE -> "GATE PASS assigns driver Rathnayake · UUID $uuid"
-            DRIVER_UUID_LASANTHA -> "GATE PASS assigns driver Lasantha · UUID $uuid"
+        return when (DispatchRepository.resolveKnownDriverUuid(effective)) {
+            DRIVER_UUID_RATHNAYAKE -> "GATE PASS assigns driver Rathnayake"
+            DRIVER_UUID_LASANTHA -> "GATE PASS assigns driver Lasantha"
             else -> "GATE PASS assigns delivery · $effective"
         }
     }
@@ -447,8 +446,8 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                 it.mode.equals("DISPATCH", ignoreCase = true) || it.mode.equals("RETURN", ignoreCase = true)
             }
             if (alreadyDispatched != null) {
-                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(alreadyDispatched.scannedAt))
-                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already ${if (alreadyDispatched.mode.equals("RETURN", ignoreCase = true)) "returned" else "dispatched"}.\nFirst scan at $timeStr · ${alreadyDispatched.scannerName.ifBlank { _scannerName.value }}"
+                val timeStr = DispatchRepository.formatSriLankaDateTime(alreadyDispatched.scannedAt)
+                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already ${if (alreadyDispatched.mode.equals("RETURN", ignoreCase = true)) "returned" else "dispatched"}.\nFirst scan at $timeStr (SLST) · ${alreadyDispatched.scannerName.ifBlank { _scannerName.value }}"
             } else {
                 null
             }
@@ -457,8 +456,8 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                 it.mode.equals("RETURN", ignoreCase = true)
             }
             if (alreadyReturned != null) {
-                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(alreadyReturned.scannedAt))
-                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already returned.\nReturned at $timeStr · ${alreadyReturned.scannerName.ifBlank { _scannerName.value }}"
+                val timeStr = DispatchRepository.formatSriLankaDateTime(alreadyReturned.scannedAt)
+                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already returned.\nReturned at $timeStr (SLST) · ${alreadyReturned.scannerName.ifBlank { _scannerName.value }}"
             } else {
                 null
             }
@@ -642,21 +641,23 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
             when (syncResult) {
                 is SyncStatusResult.Success -> {
-                    _manualDispatchStatus.value = "Order #$orderNo (GATE PASS) dispatched & assigned to $effectiveVehicle!"
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
+                    _manualDispatchStatus.value = "Order #$orderNo (GATE PASS) dispatched & assigned to $effectiveVehicle at $slTime (SLST)!"
                     _manualDispatchOrderInput.value = ""
                     showTopToast(
                         title = "#$orderNo dispatched",
-                        subtitle = "GATE PASS · assigned to ${effectiveVehicle.replace("(", "· ").replace(")", "")}",
+                        subtitle = "GATE PASS · ${effectiveVehicle.replace("(", "· ").replace(")", "")} · $slTime",
                         isOffline = false
                     )
                     triggerFeedback(context)
                 }
                 is SyncStatusResult.Offline -> {
-                    _manualDispatchStatus.value = "Saved locally (Offline). Order #$orderNo (GATE PASS) queued for $effectiveVehicle."
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
+                    _manualDispatchStatus.value = "Saved locally (Offline) at $slTime (SLST). Order #$orderNo queued for $effectiveVehicle."
                     _manualDispatchOrderInput.value = ""
                     showTopToast(
                         title = "Saved offline · #$orderNo",
-                        subtitle = "GATE PASS · syncs when back online",
+                        subtitle = "GATE PASS · $slTime (SLST) · syncs when online",
                         isOffline = true
                     )
                     triggerFeedback(context)
@@ -746,21 +747,23 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
             when (syncResult) {
                 is SyncStatusResult.Success -> {
-                    _manualReturnStatus.value = "Order #$orderNo recorded as RETURNED & RESTOCKED ($effectiveVehicle)!"
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
+                    _manualReturnStatus.value = "Order #$orderNo recorded as RETURNED & RESTOCKED ($effectiveVehicle) at $slTime (SLST)!"
                     _manualOrderInput.value = ""
                     showTopToast(
                         title = "#$orderNo returned",
-                        subtitle = "GATE PASS · ${if (restocked) "restocked to inventory" else "returned"} · $effectiveVehicle",
+                        subtitle = "GATE PASS · $effectiveVehicle · $slTime",
                         isOffline = false
                     )
                     triggerFeedback(context)
                 }
                 is SyncStatusResult.Offline -> {
-                    _manualReturnStatus.value = "Saved locally (Offline). Order #$orderNo marked returned & restocked ($effectiveVehicle)."
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
+                    _manualReturnStatus.value = "Saved locally (Offline) at $slTime (SLST). Order #$orderNo marked returned ($effectiveVehicle)."
                     _manualOrderInput.value = ""
                     showTopToast(
                         title = "Saved offline · #$orderNo",
-                        subtitle = "RETURN · syncs when back online",
+                        subtitle = "RETURN · $slTime (SLST) · syncs when online",
                         isOffline = true
                     )
                     triggerFeedback(context)
@@ -867,11 +870,12 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
             when (syncResult) {
                 is SyncStatusResult.Success -> {
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
                     val toastTitle = if (isReturn) "#$orderNo returned" else "#$orderNo dispatched"
                     val toastSub = when {
-                        isReturn -> "$normalizedCopy · restocked · $effectiveVehicle"
-                        isGatePass -> "GATE PASS · assigned to ${effectiveVehicle.replace("(", "· ").replace(")", "")}"
-                        else -> "$normalizedCopy · recorded (driver unchanged)"
+                        isReturn -> "$normalizedCopy · $effectiveVehicle · $slTime"
+                        isGatePass -> "GATE PASS · ${effectiveVehicle.replace("(", "· ").replace(")", "")} · $slTime"
+                        else -> "$normalizedCopy · recorded · $slTime"
                     }
                     showTopToast(title = toastTitle, subtitle = toastSub, isOffline = false)
                     onSuccess()
@@ -891,9 +895,10 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                     onSuccess()
                 }
                 is SyncStatusResult.Offline -> {
+                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
                     showTopToast(
                         title = "Saved offline · #$orderNo",
-                        subtitle = "$normalizedCopy · syncs when back online",
+                        subtitle = "$normalizedCopy · $slTime (SLST)",
                         isOffline = true
                     )
                     onSuccess()
@@ -907,12 +912,12 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             _isSyncing.value = true
             val result = repository.syncRecord(record)
             _isSyncing.value = false
-            _lastSyncTime.value = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            _lastSyncTime.value = DispatchRepository.formatSriLankaDateTime()
             when (result) {
                 is SyncStatusResult.Success -> {
                     showTopToast(
                         title = "#${record.orderNo} synced",
-                        subtitle = "${record.copy} · ${record.vehicleNumber}",
+                        subtitle = "${record.copy} · ${record.vehicleNumber} · ${DispatchRepository.formatSriLankaDateTime(record.scannedAt)}",
                         isOffline = false
                     )
                     triggerFeedback(context)
@@ -1025,7 +1030,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             _syncMessage.value = "Syncing pending records with Supabase factory database..."
             val summary = repository.syncPendingRecords()
             _isSyncing.value = false
-            _lastSyncTime.value = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            _lastSyncTime.value = DispatchRepository.formatSriLankaDateTime()
             _lastSyncSummary.value = summary
             _syncMessage.value = summary.message
         }
@@ -1038,11 +1043,10 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
     fun clearTodayLogAndSync(context: Context, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
             try {
-                val todayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                val todayStr = todayFormat.format(Date())
+                val todayStr = DispatchRepository.formatSriLankaDateOnly()
                 val currentRecords = allRecordsState.value
                 val recordsToDelete = currentRecords.filter {
-                    todayFormat.format(Date(it.scannedAt)) == todayStr
+                    DispatchRepository.formatSriLankaDateOnly(it.scannedAt) == todayStr
                 }
 
                 recordsToDelete.forEach { record ->
@@ -1100,7 +1104,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                     )
                     repository.insertRecord(newRecord)
                 }
-                _lastSyncTime.value = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                _lastSyncTime.value = DispatchRepository.formatSriLankaDateTime()
                 onSuccess()
             } catch (e: Exception) {
                 e.printStackTrace()

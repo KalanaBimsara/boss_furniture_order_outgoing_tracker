@@ -39,6 +39,38 @@ class DispatchRepository(
             COPY_PRODUCTION
         )
 
+        val SRI_LANKA_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Colombo")
+
+        fun formatSriLankaIsoTimestamp(epochMillis: Long = System.currentTimeMillis()): String {
+            return try {
+                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+                sdf.timeZone = SRI_LANKA_TIME_ZONE
+                sdf.format(Date(epochMillis))
+            } catch (_: Exception) {
+                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'+05:30'", Locale.US)
+                sdf.timeZone = SRI_LANKA_TIME_ZONE
+                sdf.format(Date(epochMillis))
+            }
+        }
+
+        fun formatSriLankaDateTime(epochMillis: Long = System.currentTimeMillis()): String {
+            val sdf = SimpleDateFormat("yyyy-MM-dd · HH:mm:ss", Locale.US)
+            sdf.timeZone = SRI_LANKA_TIME_ZONE
+            return sdf.format(Date(epochMillis))
+        }
+
+        fun formatSriLankaDateOnly(epochMillis: Long = System.currentTimeMillis()): String {
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            sdf.timeZone = SRI_LANKA_TIME_ZONE
+            return sdf.format(Date(epochMillis))
+        }
+
+        fun formatSriLankaTimeOnly(epochMillis: Long = System.currentTimeMillis()): String {
+            val sdf = SimpleDateFormat("HH:mm:ss", Locale.US)
+            sdf.timeZone = SRI_LANKA_TIME_ZONE
+            return sdf.format(Date(epochMillis))
+        }
+
         fun normalizeCopyType(rawCopy: String?): String {
             val cleaned = rawCopy?.trim().orEmpty().uppercase()
             return when {
@@ -142,10 +174,8 @@ class DispatchRepository(
         }
     }
 
-    private fun getIsoTimestamp(): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
-        return sdf.format(Date())
+    private fun getIsoTimestamp(epochMillis: Long = System.currentTimeMillis()): String {
+        return formatSriLankaIsoTimestamp(epochMillis)
     }
 
     /**
@@ -169,7 +199,7 @@ class DispatchRepository(
 
         try {
             val api = SupabaseApiClient.getApiService(supabaseUrl, supabaseKey)
-            val isoTime = getIsoTimestamp()
+            val isoTime = getIsoTimestamp(record.scannedAt)
 
             // 1. Fetch order from `public.orders` by order_form_number (or id)
             var matchedOrder: SupabaseOrder? = null

@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.local.ScannedRecord
+import com.example.data.repository.DispatchRepository
 import com.example.ui.theme.*
 import com.example.viewmodel.DispatchViewModel
 import com.example.viewmodel.OperationMode
@@ -186,13 +187,13 @@ fun ScannerOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 36.dp, vertical = 18.dp),
+            .padding(horizontal = 24.dp, vertical = 28.dp),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val strokeWidth = 3.5.dp.toPx()
-            val cornerLen = 22.dp.toPx()
-            val radius = 12.dp.toPx()
+            val cornerLen = 30.dp.toPx()
+            val radius = 14.dp.toPx()
 
             // Top-Left corner
             drawArc(
@@ -911,11 +912,11 @@ fun ScannerScreen(
                 }
             }
 
-            // Camera QR Viewport (r22)
+            // Maximized Camera QR Viewport (r22) for easier scanning
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(205.dp)
+                    .height(360.dp)
                     .offset { IntOffset(shakeOffset.value.roundToInt(), 0) }
                     .clip(RoundedCornerShape(22.dp))
                     .background(Neutral950),
@@ -1545,7 +1546,7 @@ fun PendingScreen(viewModel: DispatchViewModel) {
 
         // LAST SYNC 4-Column Card
         SectionHeaderLabel(
-            text = "LAST SYNC · ${lastSyncTime ?: SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())}"
+            text = "LAST SYNC · ${lastSyncTime ?: DispatchRepository.formatSriLankaDateTime()} (SLST)"
         )
         Surface(
             shape = RoundedCornerShape(12.dp),
@@ -1729,7 +1730,7 @@ private fun SwipeablePendingRow(
 ) {
     val isReturn = record.mode.equals("RETURN", ignoreCase = true)
     val timeStr = remember(record.scannedAt) {
-        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(record.scannedAt))
+        DispatchRepository.formatSriLankaDateTime(record.scannedAt)
     }
     var offsetX by remember { mutableFloatStateOf(0f) }
     val animatedOffsetX by animateFloatAsState(
@@ -1985,7 +1986,7 @@ fun HistoryScreen(viewModel: DispatchViewModel) {
             letterSpacing = (-0.8).sp
         )
         Text(
-            text = "Today · ${scannerName.ifBlank { "Station 01" }} · ${history.size} shown",
+            text = "Today (${DispatchRepository.formatSriLankaDateOnly()}) · ${scannerName.ifBlank { "Station 01" }} · ${history.size} shown",
             fontFamily = InterFontFamily,
             fontSize = 15.sp,
             color = SecondaryLabel
@@ -2162,8 +2163,9 @@ fun HistoryScreen(viewModel: DispatchViewModel) {
 
 @Composable
 fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
-    val timeFormatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val formattedTime = remember(record.scannedAt) { timeFormatter.format(Date(record.scannedAt)) }
+    val formattedTime = remember(record.scannedAt) {
+        DispatchRepository.formatSriLankaDateTime(record.scannedAt)
+    }
     val statusUpper = record.syncStatus.uppercase()
 
     Row(
@@ -2350,20 +2352,6 @@ fun SettingsScreen(viewModel: DispatchViewModel) {
     var passwordInput by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var passwordError by remember { mutableStateOf(false) }
-
-    val recommendedSqlScript = remember {
-        """
--- one dispatch + one return per copy
-alter table public.transport
-  add column if not exists copy_name text,
-  add column if not exists transport_status text;
-
-create unique index if not exists
-  transport_once_per_status
-  on public.transport
-  (order_id, copy_name, transport_status);
-        """.trimIndent()
-    }
 
     // LOCKED STATE (State 10 in Key States)
     if (!isUnlocked) {
@@ -2899,47 +2887,6 @@ create unique index if not exists
         }
 
         Spacer(modifier = Modifier.height(20.dp))
-
-        // SQL SETUP Section
-        SectionHeaderLabel(
-            text = "SQL SETUP",
-            trailing = {
-                Text(
-                    text = "Copy",
-                    fontFamily = InterFontFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = DispatchIndigo,
-                    modifier = Modifier
-                        .clickable {
-                            clipboardManager.setText(AnnotatedString(recommendedSqlScript))
-                            viewModel.showTopToast(
-                                title = "SQL copied",
-                                subtitle = "Paste in Supabase SQL Editor",
-                                isOffline = false
-                            )
-                        }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
-            }
-        )
-
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = Neutral900,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = recommendedSqlScript,
-                fontFamily = JetBrainsMonoFontFamily,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-                color = Color(0xFFE4E4E7),
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
 
         // DEVICE Section
         SectionHeaderLabel(text = "DEVICE")

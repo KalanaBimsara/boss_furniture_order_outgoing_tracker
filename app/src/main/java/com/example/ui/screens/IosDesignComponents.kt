@@ -609,6 +609,7 @@ fun AutoConfirmScanSheet(
     val scannedCopy = DispatchRepository.normalizeCopyType(payload.copy)
     val isGatePass = DispatchRepository.isGatePassCopy(scannedCopy)
     val accentColor = if (isReturnMode) ReturnAmber else DispatchIndigo
+    val scanTimeSlst = remember(payload) { DispatchRepository.formatSriLankaDateTime() }
 
     val progressAnim = remember(payload) { Animatable(1f) }
     LaunchedEffect(payload) {
@@ -775,6 +776,12 @@ fun AutoConfirmScanSheet(
                     )
                 }
 
+                HairlineDivider()
+                SheetKeyValueRow(
+                    label = "Time (Sri Lanka)",
+                    value = scanTimeSlst
+                )
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Action Callout Box
@@ -914,8 +921,9 @@ fun RecordDetailScreen(
 ) {
     BackHandler { onBack() }
     val clipboardManager = LocalClipboardManager.current
-    val dateFormat = remember { SimpleDateFormat("dd MMM · HH:mm:ss", Locale.getDefault()) }
-    val scannedStr = remember(record.scannedAt) { dateFormat.format(Date(record.scannedAt)) }
+    val scannedStr = remember(record.scannedAt) {
+        "${DispatchRepository.formatSriLankaDateTime(record.scannedAt)} (SLST)"
+    }
     val statusUpper = record.syncStatus.uppercase()
 
     Column(
@@ -1244,6 +1252,7 @@ fun RecordDetailScreen(
   "vehicle": "${record.vehicleNumber}",
   "table_index": "${record.tableIndex}/${record.tableCount.coerceAtLeast(1)}",
   "size": "${record.size.ifBlank { "Standard" }}",
+  "scanned_at_sri_lanka": "${DispatchRepository.formatSriLankaDateTime(record.scannedAt)}",
   "transport_status": "${if (record.mode.equals("RETURN", true)) "returned" else "dispatched"}"
 }
                     """.trimIndent()

@@ -81,7 +81,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `vehicle selection maps DAC-4912 and DAE-4217 to exact Supabase profile UUIDs and assigns delivery option for Pick Me and Custom Vehicle`() {
+    fun `vehicle selection maps DAC-4912 and DAE-4217 to exact Supabase profile UUIDs without showing UUID in UI summary`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = DispatchViewModel(app)
 
@@ -91,7 +91,8 @@ class ExampleRobolectricTest {
             "de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56",
             viewModel.getAssignedDriverUuid()
         )
-        assertTrue(viewModel.getAssignedDeliverySummary().contains("de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56"))
+        assertEquals("GATE PASS assigns driver Rathnayake", viewModel.getAssignedDeliverySummary())
+        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("de7a7b6c"))
 
         // 2. DAE-4217 (Lasantha) -> 0c940655-4963-4036-ae66-4a889f9d368f
         viewModel.setSelectedVehicleOption("DAE-4217 (Lasantha)")
@@ -99,7 +100,8 @@ class ExampleRobolectricTest {
             "0c940655-4963-4036-ae66-4a889f9d368f",
             viewModel.getAssignedDriverUuid()
         )
-        assertTrue(viewModel.getAssignedDeliverySummary().contains("0c940655-4963-4036-ae66-4a889f9d368f"))
+        assertEquals("GATE PASS assigns driver Lasantha", viewModel.getAssignedDeliverySummary())
+        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("0c940655"))
 
         // 3. Pick Me -> delivery option assigned to Pick Me (CAA-8910)
         viewModel.setSelectedVehicleOption("Pick Me")
@@ -113,6 +115,17 @@ class ExampleRobolectricTest {
         assertNull(viewModel.getAssignedDriverUuid())
         assertEquals("WP-DAG-5544", viewModel.getEffectiveVehicleNumber())
         assertTrue(viewModel.getAssignedDeliverySummary().contains("WP-DAG-5544"))
+
+        // 5. Verify Sri Lanka (Asia/Colombo, UTC+05:30) timestamp formatting
+        // Epoch 0L is 1970-01-01 00:00:00 UTC -> 1970-01-01 05:30:00 in Sri Lanka
+        assertEquals(
+            "1970-01-01 · 05:30:00",
+            com.example.data.repository.DispatchRepository.formatSriLankaDateTime(0L)
+        )
+        assertTrue(
+            com.example.data.repository.DispatchRepository.formatSriLankaIsoTimestamp(0L)
+                .startsWith("1970-01-01T05:30:00+05:30")
+        )
     }
 
     @Test
