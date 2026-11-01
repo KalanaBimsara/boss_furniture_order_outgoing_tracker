@@ -97,6 +97,12 @@ jobs:
             fi
           fi
 
+      - name: Run Unit & Robolectric Tests
+        env:
+          JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
+        run: |
+          gradle :app:testDebugUnitTest -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
+
       - name: Build Debug & Release APKs
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks

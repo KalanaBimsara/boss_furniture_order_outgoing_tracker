@@ -428,13 +428,13 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         copyName: String,
         tableIndex: Int = 1
     ): String? {
-        val normalizedOrder = orderNo.trim()
+        val normalizedOrder = DispatchRepository.normalizeOrderNo(orderNo)
         if (normalizedOrder.isEmpty()) return null
         val normalizedCopy = DispatchRepository.normalizeCopyType(copyName)
         val isReturn = mode.equals("RETURN", ignoreCase = true)
 
         val matchingRecords = allRecordsState.value.filter { record ->
-            record.orderNo.trim().equals(normalizedOrder, ignoreCase = true) &&
+            DispatchRepository.normalizeOrderNo(record.orderNo).equals(normalizedOrder, ignoreCase = true) &&
                 record.syncStatus != "FAILED" &&
                 record.syncStatus != "DUPLICATE" &&
                 DispatchRepository.normalizeCopyType(record.copy) == normalizedCopy &&
@@ -475,12 +475,12 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         val trimmed = rawContent.trim()
         val isReturnMode = _currentMode.value == OperationMode.RETURN
 
-        // Attempt 1: Standard JSON QrPayload
+        // Attempt 1: Standard JSON QrPayload (supports both camelCase and snake_case keys)
         try {
             val payload = qrAdapter.fromJson(trimmed)
-            if (payload != null && !payload.orderNo.isNullOrEmpty()) {
-                val normalizedCopy = DispatchRepository.normalizeCopyType(payload.copy)
-                handleValidPayload(payload.copy(copy = normalizedCopy), trimmed, isReturnMode, context)
+            if (payload != null && payload.resolvedOrderNo.isNotEmpty()) {
+                val normalizedCopy = DispatchRepository.normalizeCopyType(payload.resolvedCopy)
+                handleValidPayload(payload.toNormalized(normalizedCopy), trimmed, isReturnMode, context)
                 return
             }
         } catch (ignored: Exception) {
@@ -488,21 +488,24 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         }
 
         // Attempt 2: Plaintext format or Order Number format (e.g., "ORD-12345" or "1024")
-        if (trimmed.isNotBlank() && trimmed.length in 3..64) {
-            val orderNum = if (trimmed.startsWith("ORDER:", ignoreCase = true)) {
+        if (trimmed.isNotBlank() && trimmed.length in 1..64 && !trimmed.startsWith("{")) {
+            val rawOrderNum = if (trimmed.startsWith("ORDER:", ignoreCase = true)) {
                 trimmed.substringAfter(":").trim()
             } else {
                 trimmed
             }
-            val syntheticPayload = QrPayload(
-                orderNo = orderNum,
-                customer = "Factory Order",
-                copy = DispatchRepository.COPY_GATE_PASS,
-                qty = 1,
-                totalUnits = 1
-            )
-            handleValidPayload(syntheticPayload, trimmed, isReturnMode, context)
-            return
+            val orderNum = DispatchRepository.normalizeOrderNo(rawOrderNum)
+            if (orderNum.isNotEmpty()) {
+                val syntheticPayload = QrPayload(
+                    orderNo = orderNum,
+                    customer = "Factory Order",
+                    copy = DispatchRepository.COPY_GATE_PASS,
+                    qty = 1,
+                    totalUnits = 1
+                )
+                handleValidPayload(syntheticPayload, trimmed, isReturnMode, context)
+                return
+            }
         }
 
         _scanError.value = "Invalid QR code format."
@@ -517,11 +520,11 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         isReturnMode: Boolean,
         context: Context
     ) {
-        val normalizedCopy = DispatchRepository.normalizeCopyType(payload.copy)
-        val normalizedPayload = payload.copy(copy = normalizedCopy)
+        val normalizedCopy = DispatchRepository.normalizeCopyType(payload.resolvedCopy)
+        val normalizedPayload = payload.toNormalized(normalizedCopy)
         val modeStr = if (isReturnMode) "RETURN" else "DISPATCH"
-        val orderNo = normalizedPayload.orderNo.orEmpty().trim()
-        val tableIdx = normalizedPayload.tableIndex ?: 1
+        val orderNo = normalizedPayload.resolvedOrderNo
+        val tableIdx = normalizedPayload.resolvedTableIndex
 
         // Authorization check (only applies in dispatch mode if configured)
         if (!isReturnMode) {
@@ -573,7 +576,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
     // Process Manual Dispatch by typing Order Number (dispatches GATE PASS and assigns order to driver)
     fun processManualDispatch(context: Context) {
-        val orderNo = _manualDispatchOrderInput.value.trim()
+        val orderNo = DispatchRepository.normalizeOrderNo(_manualDispatchOrderInput.value)
         if (orderNo.isBlank()) {
             _manualDispatchStatus.value = "Please enter an order number."
             triggerErrorFeedback(context)
@@ -678,7 +681,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
     // Process Manual Return by typing Order Number
     fun processManualReturn(context: Context) {
-        val orderNo = _manualOrderInput.value.trim()
+        val orderNo = DispatchRepository.normalizeOrderNo(_manualOrderInput.value)
         if (orderNo.isBlank()) {
             _manualReturnStatus.value = "Please enter an order number."
             triggerErrorFeedback(context)

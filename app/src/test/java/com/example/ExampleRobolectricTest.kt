@@ -161,12 +161,30 @@ class ExampleRobolectricTest {
         assertEquals("returned", com.example.data.repository.DispatchRepository.TRANSPORT_STATUS_RETURNED)
         assertEquals(
             "DISPATCH|1024|GATE PASS|1",
-            com.example.data.repository.DispatchRepository.buildDuplicateKey("dispatch", "1024", "Gate Pass", 1)
+            com.example.data.repository.DispatchRepository.buildDuplicateKey("dispatch", "#1024", "Gate Pass", 1)
         )
         assertEquals(
             "RETURN|1024|GATE PASS|1",
-            com.example.data.repository.DispatchRepository.buildDuplicateKey("return", "1024", "Gate Pass", 1)
+            com.example.data.repository.DispatchRepository.buildDuplicateKey("return", "#1024", "Gate Pass", 1)
         )
+    }
+
+    @Test
+    fun `QR scan parses both camelCase and snake_case JSON payloads and normalizes orderNo and copy`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = DispatchViewModel(app)
+        viewModel.setMode(OperationMode.DISPATCH)
+        viewModel.setSelectedVehicleOption("DAC-4912 (Rathnayake)")
+
+        val snakeJson = """{"order_form_number":"#3517","customer_name":"Chamin","customer_district":"Colombo","copy_name":"GATE PASS","quantity":1}"""
+        viewModel.onQrScanned(snakeJson, app)
+
+        val scanned = viewModel.scannedPayload.value
+        org.junit.Assert.assertNotNull(scanned)
+        assertEquals("3517", scanned?.orderNo)
+        assertEquals("GATE PASS", scanned?.copy)
+        assertEquals("Chamin", scanned?.customer)
+        assertEquals("Colombo", scanned?.district)
     }
 }
 

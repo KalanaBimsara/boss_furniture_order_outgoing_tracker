@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import com.example.data.api.DispatchReturnLogInsertBody
 import com.example.data.api.OrderPatchBody
+import com.example.data.api.SupabaseApi
 import com.example.data.api.SupabaseApiClient
 import com.example.data.api.SupabaseOrder
 import com.example.data.api.TransportInsertBody
@@ -16,9 +17,10 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-class DispatchRepository(
+open class DispatchRepository(
     private val dao: ScannedRecordDao,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository? = null,
+    private val apiOverride: SupabaseApi? = null
 ) {
     companion object {
         const val DRIVER_UUID_RATHNAYAKE = "de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56"
@@ -71,6 +73,14 @@ class DispatchRepository(
             return sdf.format(Date(epochMillis))
         }
 
+        fun normalizeOrderNo(rawOrderNo: String?): String {
+            return rawOrderNo
+                ?.trim()
+                ?.removePrefix("#")
+                ?.trim()
+                .orEmpty()
+        }
+
         fun normalizeCopyType(rawCopy: String?): String {
             val cleaned = rawCopy?.trim().orEmpty().uppercase()
             return when {
@@ -94,7 +104,7 @@ class DispatchRepository(
             tableIndex: Int = 1
         ): String {
             val normalizedMode = mode.trim().uppercase()
-            val normalizedOrder = orderNo.trim().uppercase()
+            val normalizedOrder = normalizeOrderNo(orderNo).uppercase()
             val normalizedCopy = normalizeCopyType(copyName)
             return "$normalizedMode|$normalizedOrder|$normalizedCopy|$tableIndex"
         }
@@ -140,7 +150,7 @@ class DispatchRepository(
         tableIndex: Int = 1,
         excludeId: Long = 0L
     ): String? {
-        val normalizedOrder = orderNo.trim()
+        val normalizedOrder = normalizeOrderNo(orderNo)
         if (normalizedOrder.isEmpty()) return null
         val normalizedCopy = normalizeCopyType(copyName)
         val isReturn = mode.equals("RETURN", ignoreCase = true)
@@ -179,48 +189,106 @@ class DispatchRepository(
     }
 
     /**
+     * Assigns the order in `public.orders` to the resolved driver (`delivery_person_id`) and sets
+     * `status = "assigned"` and `delivery_status = "assigned"`.
+     * Strictly verifies that Supabase returned at least 1 updated row in the response body.
+     * Never writes to `note` or any other order columns.
+     */
+    private suspend fun assignOrderToDriverInSupabase(
+        api: SupabaseApi,
+        resolvedOrderId: String,
+        cleanOrderNo: String,
+        deliveryPersonId: String?,
+        isoTime: String
+    ): String? {
+        val patchBody = OrderPatchBody(
+            delivery_person_id = deliveryPersonId,
+            status = "assigned",
+            delivery_status = "assigned",
+            updated_at = isoTime
+        )
+
+        var patchResponse = api.updateOrderStatusById("eq.$resolvedOrderId", patchBody)
+        if (!patchResponse.isSuccessful || patchResponse.body().isNullOrEmpty()) {
+            val fallbackResponse = api.updateOrderStatus("eq.$cleanOrderNo", patchBody)
+            if (fallbackResponse.isSuccessful && !fallbackResponse.body().isNullOrEmpty()) {
+                patchResponse = fallbackResponse
+            }
+        }
+
+        if (!patchResponse.isSuccessful) {
+            return "Supabase Order Update HTTP ${patchResponse.code()}: ${patchResponse.message()}"
+        }
+
+        val updatedOrders = patchResponse.body()
+        if (updatedOrders.isNullOrEmpty()) {
+            return "Order #$cleanOrderNo could not be updated to assigned in public.orders (0 rows affected)."
+        }
+
+        val updated = updatedOrders.first()
+        if (!updated.status.equals("assigned", ignoreCase = true)) {
+            return "Order #$cleanOrderNo status remained '${updated.status}' instead of 'assigned'."
+        }
+
+        return null
+    }
+
+    /**
      * Syncs a ScannedRecord (Dispatch or Return) to the central Supabase Factory Database:
      * 1. Looks up the order in `public.orders` by `order_form_number` (or `id`) to resolve its UUID (`id`).
      * 2. Enforces strict duplicate prevention against `public.transport` using `(order_id, copy_name)` and `transport_status`:
      *    - Every `(order_id, copy_name)` can be dispatched once (`transport_status = "dispatched"`) and returned (`transport_status = "returned"`).
-     *    - Scanning the same copy in DISPATCH mode when a row already exists in `public.transport` is rejected as a Duplicate.
+     *    - Scanning the same copy in DISPATCH mode when a row already exists in `public.transport` is rejected as a Duplicate
+     *      (unless `public.orders` was previously left in `pending` state, in which case it self-heals `public.orders` first).
      *    - Scanning the same copy in RETURN mode when `transport_status` is already `"returned"` is rejected as a Duplicate.
      * 3. In DISPATCH mode:
      *    - ONLY when the scanned copy is `GATE PASS`:
      *      - Assigns the order to the selected driver (`delivery_person_id`) and sets `status = "assigned"`, `delivery_status = "assigned"` in `public.orders`.
+     *      - Strictly verifies that `public.orders` returned the updated row before recording transport.
      *      - Never writes to `note` or any other order columns in `public.orders`.
      *    - Records `copy_name` (`ACCOUNT COPY`, `GATE PASS`, `TRANSPORT COPY`, `PRODUCTION COPY`) and `transport_status = "dispatched"` in `public.transport`.
      * 4. In RETURN mode:
      *    - Updates (or inserts) the row in `public.transport` with `copy_name` and `transport_status = "returned"`.
      */
-    suspend fun syncRecord(record: ScannedRecord): SyncStatusResult = withContext(Dispatchers.IO) {
-        val supabaseUrl = settingsRepo.getSupabaseUrl()
-        val supabaseKey = settingsRepo.getSupabaseKey()
+    open suspend fun syncRecord(record: ScannedRecord): SyncStatusResult = withContext(Dispatchers.IO) {
+        val supabaseUrl = settingsRepo?.getSupabaseUrl() ?: SettingsRepository.DEFAULT_SUPABASE_URL
+        val supabaseKey = settingsRepo?.getSupabaseKey() ?: SettingsRepository.DEFAULT_SUPABASE_KEY
 
         try {
-            val api = SupabaseApiClient.getApiService(supabaseUrl, supabaseKey)
+            val api = apiOverride ?: SupabaseApiClient.getApiService(supabaseUrl, supabaseKey)
             val isoTime = getIsoTimestamp(record.scannedAt)
+            val cleanOrderNo = normalizeOrderNo(record.orderNo)
 
             // 1. Fetch order from `public.orders` by order_form_number (or id)
             var matchedOrder: SupabaseOrder? = null
-            val foundByOrderNo = api.getOrderByOrderNumber("eq.${record.orderNo}")
-            if (foundByOrderNo.isNotEmpty()) {
-                matchedOrder = foundByOrderNo.first()
-            } else if (record.orderId.length == 36 && record.orderId.contains("-")) {
+            if (cleanOrderNo.isNotEmpty()) {
+                val foundByOrderNo = api.getOrderByOrderNumber("eq.$cleanOrderNo")
+                if (foundByOrderNo.isNotEmpty()) {
+                    matchedOrder = foundByOrderNo.first()
+                }
+            }
+            if (matchedOrder == null && record.orderId.length == 36 && record.orderId.contains("-")) {
                 val foundById = api.getOrderById("eq.${record.orderId}")
                 if (foundById.isNotEmpty()) {
                     matchedOrder = foundById.first()
                 }
             }
+            if (matchedOrder == null && cleanOrderNo.length == 36 && cleanOrderNo.contains("-")) {
+                val foundByOrderNoAsUuid = api.getOrderById("eq.$cleanOrderNo")
+                if (foundByOrderNoAsUuid.isNotEmpty()) {
+                    matchedOrder = foundByOrderNoAsUuid.first()
+                }
+            }
 
             val effectiveVehicle = record.vehicleNumber.trim().ifBlank {
-                settingsRepo.getSelectedVehicleOption()
+                settingsRepo?.getSelectedVehicleOption() ?: "DAC-4912 (Rathnayake)"
             }
             val normalizedCopy = normalizeCopyType(record.copy)
 
             // Enrich local record with real Supabase order metadata if available
             val enrichedRecord = if (matchedOrder != null) {
                 record.copy(
+                    orderNo = matchedOrder.order_form_number?.ifBlank { cleanOrderNo } ?: cleanOrderNo,
                     copy = normalizedCopy,
                     orderId = matchedOrder.id ?: record.orderId,
                     customer = matchedOrder.customer_name?.ifBlank { record.customer } ?: record.customer,
@@ -235,22 +303,24 @@ class DispatchRepository(
                     notes = ""
                 )
             } else {
-                record.copy(copy = normalizedCopy, notes = "")
+                record.copy(orderNo = cleanOrderNo, copy = normalizedCopy, notes = "")
             }
 
             // 2. Resolve driver UUID from selected vehicle or `public.profiles`
             var deliveryPersonId: String? = resolveKnownDriverUuid(effectiveVehicle)
             if (deliveryPersonId == null && !effectiveVehicle.startsWith("Pick Me", ignoreCase = true)) {
-                if (effectiveVehicle.contains("(") && effectiveVehicle.contains(")")) {
-                    val driverName = effectiveVehicle.substringAfter("(").substringBefore(")").trim()
-                    if (driverName.isNotEmpty()) {
-                        try {
-                            val profiles = api.getProfileByName("eq.$driverName")
-                            if (profiles.isNotEmpty()) {
-                                deliveryPersonId = profiles[0].id
-                            }
-                        } catch (_: Exception) {}
-                    }
+                val candidateName = if (effectiveVehicle.contains("(") && effectiveVehicle.contains(")")) {
+                    effectiveVehicle.substringAfter("(").substringBefore(")").trim()
+                } else {
+                    effectiveVehicle.trim()
+                }
+                if (candidateName.isNotEmpty()) {
+                    try {
+                        val profiles = api.getProfileByName("eq.$candidateName")
+                        if (profiles.isNotEmpty()) {
+                            deliveryPersonId = profiles[0].id
+                        }
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -275,8 +345,50 @@ class DispatchRepository(
             }
 
             if (!isReturnMode) {
-                // DISPATCH MODE: Every record (order_id + copy_name) can only be dispatched ONCE
+                // DISPATCH MODE: Every record (order_id + copy_name) can only be dispatched ONCE.
+                // Self-healing check: If a transport record exists for GATE PASS from an earlier unauthenticated scan
+                // where `public.orders` was left in `pending` or without `delivery_person_id`, repair `public.orders` first!
                 if (matchingTransport != null) {
+                    val orderNeedsAssignmentRepair = isGatePass && (
+                        !matchedOrder.status.equals("assigned", ignoreCase = true) ||
+                            !matchedOrder.delivery_status.equals("assigned", ignoreCase = true) ||
+                            (deliveryPersonId != null && matchedOrder.delivery_person_id != deliveryPersonId)
+                        )
+
+                    if (orderNeedsAssignmentRepair) {
+                        val patchErr = assignOrderToDriverInSupabase(
+                            api = api,
+                            resolvedOrderId = resolvedOrderId,
+                            cleanOrderNo = enrichedRecord.orderNo,
+                            deliveryPersonId = deliveryPersonId,
+                            isoTime = isoTime
+                        )
+                        if (patchErr != null) {
+                            enrichedRecord.syncStatus = "FAILED"
+                            enrichedRecord.errorMessage = patchErr
+                            dao.updateRecord(enrichedRecord)
+                            return@withContext SyncStatusResult.Failed(patchErr)
+                        }
+                        if (!matchingTransport.id.isNullOrBlank()) {
+                            try {
+                                api.updateTransportById(
+                                    idFilter = "eq.${matchingTransport.id}",
+                                    body = TransportPatchBody(
+                                        transport_mode = effectiveVehicle,
+                                        loaded_at = isoTime,
+                                        loaded_by = deliveryPersonId,
+                                        copy_name = normalizedCopy,
+                                        transport_status = TRANSPORT_STATUS_DISPATCHED
+                                    )
+                                )
+                            } catch (_: Exception) {}
+                        }
+                        enrichedRecord.syncStatus = "SYNCED"
+                        enrichedRecord.errorMessage = null
+                        dao.updateRecord(enrichedRecord)
+                        return@withContext SyncStatusResult.Success
+                    }
+
                     val existingStatus = matchingTransport.transport_status?.trim()?.ifBlank { TRANSPORT_STATUS_DISPATCHED }
                         ?: TRANSPORT_STATUS_DISPATCHED
                     val dupMsg = "Duplicate Denied: $normalizedCopy for Order #${enrichedRecord.orderNo} was already $existingStatus."
@@ -289,22 +401,18 @@ class DispatchRepository(
                 // 4a. ONLY GATE PASS QR code assigns the order to the driver and marks it "assigned" in `public.orders`.
                 //     Never write to `note` or any other column in `public.orders`.
                 if (isGatePass) {
-                    val patchBody = OrderPatchBody(
-                        delivery_person_id = deliveryPersonId,
-                        status = "assigned",
-                        delivery_status = "assigned",
-                        updated_at = isoTime
+                    val patchErr = assignOrderToDriverInSupabase(
+                        api = api,
+                        resolvedOrderId = resolvedOrderId,
+                        cleanOrderNo = enrichedRecord.orderNo,
+                        deliveryPersonId = deliveryPersonId,
+                        isoTime = isoTime
                     )
-                    var patchResponse = api.updateOrderStatus("eq.${enrichedRecord.orderNo}", patchBody)
-                    if (patchResponse.isSuccessful && patchResponse.body().isNullOrEmpty()) {
-                        patchResponse = api.updateOrderStatusById("eq.$resolvedOrderId", patchBody)
-                    }
-                    if (!patchResponse.isSuccessful) {
-                        val err = "Supabase HTTP ${patchResponse.code()}: ${patchResponse.message()}"
+                    if (patchErr != null) {
                         enrichedRecord.syncStatus = "FAILED"
-                        enrichedRecord.errorMessage = err
+                        enrichedRecord.errorMessage = patchErr
                         dao.updateRecord(enrichedRecord)
-                        return@withContext SyncStatusResult.Failed(err)
+                        return@withContext SyncStatusResult.Failed(patchErr)
                     }
                 }
 
