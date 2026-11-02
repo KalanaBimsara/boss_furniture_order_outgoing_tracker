@@ -50,7 +50,7 @@ class SettingsRepository(context: Context) {
             saved
         } else {
             val buildCfg = BuildConfig.SUPABASE_KEY
-            if (buildCfg.isNotBlank() && !buildCfg.contains("your-supabase")) buildCfg else DEFAULT_SUPABASE_KEY
+            if (buildCfg.isNotBlank() && buildCfg.startsWith("sb_publishable_")) buildCfg else DEFAULT_SUPABASE_KEY
         }
     }
 

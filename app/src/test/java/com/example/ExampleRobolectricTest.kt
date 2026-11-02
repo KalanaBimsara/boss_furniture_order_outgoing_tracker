@@ -69,6 +69,7 @@ class ExampleRobolectricTest {
         viewModel.setManualDispatchOrderInput("ORD-9001")
         assertEquals("ORD-9001", viewModel.manualDispatchOrderInput.value)
         viewModel.processManualDispatch(app)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
 
         // Switch to Return mode and verify vehicle remains available
         viewModel.setMode(OperationMode.RETURN)
@@ -167,24 +168,84 @@ class ExampleRobolectricTest {
             "RETURN|1024|GATE PASS|1",
             com.example.data.repository.DispatchRepository.buildDuplicateKey("return", "#1024", "Gate Pass", 1)
         )
+        assertEquals(
+            "DISPATCH|3535|30x60|teak|black|1.5x1.5|30|o shape|GATE PASS",
+            com.example.data.repository.DispatchRepository.buildDuplicateKey(
+                mode = "dispatch",
+                orderNo = "3535",
+                copyName = "GATE PASS",
+                tableIndex = 1,
+                size = "30x60",
+                topColour = "teak",
+                frameColour = "black",
+                legSize = "1.5x1.5",
+                legHeight = "30",
+                legShape = "O Shape"
+            )
+        )
     }
 
     @Test
-    fun `QR scan parses both camelCase and snake_case JSON payloads and normalizes orderNo and copy`() {
+    fun `QR scan parses Order 3535 payload with all 7 table features and reports exact size and qty`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = DispatchViewModel(app)
+        viewModel.setMode(OperationMode.DISPATCH)
+        viewModel.setSelectedVehicleOption("DAE-4217 (Lasantha)")
+
+        val qr3535 = """{"orderNo":"3535","customer":"kalana ","district":"Kandy","deliveryType":"non-courier","salesPerson":"Niyana Furniture","copy":"GATE PASS","totalUnits":3,"size":"30x60","topColour":"teak","frameColour":"black","qty":1,"legSize":"1.5x1.5","legShape":"O Shape","legHeight":"30"}"""
+        viewModel.onQrScanned(qr3535, app)
+
+        val scanned = viewModel.scannedPayload.value
+        org.junit.Assert.assertNotNull(scanned)
+        assertEquals("3535", scanned?.orderNo)
+        assertEquals("GATE PASS", scanned?.copy)
+        assertEquals("kalana", scanned?.customer)
+        assertEquals("Kandy", scanned?.district)
+        assertEquals("30x60", scanned?.size)
+        assertEquals("teak", scanned?.topColour)
+        assertEquals("black", scanned?.frameColour)
+        assertEquals("1.5x1.5", scanned?.legSize)
+        assertEquals("O Shape", scanned?.legShape)
+        assertEquals("30", scanned?.legHeight)
+        assertEquals(1, scanned?.qty)
+        assertEquals(3, scanned?.totalUnits)
+    }
+
+    @Test
+    fun `manual order entry opens confirmation sheet with editable details and note support`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = DispatchViewModel(app)
         viewModel.setMode(OperationMode.DISPATCH)
         viewModel.setSelectedVehicleOption("DAC-4912 (Rathnayake)")
 
-        val snakeJson = """{"order_form_number":"#3517","customer_name":"Chamin","customer_district":"Colombo","copy_name":"GATE PASS","quantity":1}"""
-        viewModel.onQrScanned(snakeJson, app)
+        viewModel.setManualDispatchOrderInput("4058")
+        viewModel.processManualDispatch(app)
 
-        val scanned = viewModel.scannedPayload.value
-        org.junit.Assert.assertNotNull(scanned)
-        assertEquals("3517", scanned?.orderNo)
-        assertEquals("GATE PASS", scanned?.copy)
-        assertEquals("Chamin", scanned?.customer)
-        assertEquals("Colombo", scanned?.district)
+        // Manual entry immediately opens the confirmation sheet in manual edit mode
+        assertTrue(viewModel.isManualConfirmation.value)
+        org.junit.Assert.assertNotNull(viewModel.scannedPayload.value)
+        assertEquals("4058", viewModel.scannedPayload.value?.orderNo)
+
+        // User can edit order details and set a confirmation note before confirming
+        val editedPayload = viewModel.scannedPayload.value!!.copy(
+            customer = "Sunil Furniture",
+            district = "Gampaha",
+            size = "24x60",
+            topColour = "teak",
+            frameColour = "black",
+            legSize = "1.5x1.5",
+            legHeight = "30",
+            legShape = "O Shape",
+            qty = 1
+        )
+        viewModel.updateScannedPayloadDraft(editedPayload)
+        viewModel.setConfirmationNote("Handle glass top with care")
+
+        assertEquals("Sunil Furniture", viewModel.scannedPayload.value?.customer)
+        assertEquals("24x60", viewModel.scannedPayload.value?.size)
+        assertEquals("Handle glass top with care", viewModel.confirmationNote.value)
+        viewModel.clearScannedData()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
     }
 }
 

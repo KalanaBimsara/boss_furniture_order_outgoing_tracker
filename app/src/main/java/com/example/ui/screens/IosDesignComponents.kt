@@ -43,15 +43,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.api.SupabaseOrderTable
 import com.example.data.local.ScannedRecord
 import com.example.data.model.QrPayload
 import com.example.data.repository.DispatchRepository
@@ -604,20 +612,99 @@ fun AutoConfirmScanSheet(
     isReturnMode: Boolean,
     effectiveVehicle: String,
     onConfirm: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    isManualConfirmation: Boolean = false,
+    isFetchingManualOrder: Boolean = false,
+    manualOrderFoundInDb: Boolean = true,
+    manualOrderTables: List<SupabaseOrderTable> = emptyList(),
+    initialNote: String = "",
+    initialRestocked: Boolean = true,
+    onConfirmWithEdits: ((QrPayload, String, Boolean) -> Unit)? = null
 ) {
-    val scannedCopy = DispatchRepository.normalizeCopyType(payload.copy)
+    val focusManager = LocalFocusManager.current
+    var isEditingDetails by remember(isManualConfirmation) { mutableStateOf(isManualConfirmation) }
+    var noteText by remember(payload.orderNo) { mutableStateOf(initialNote) }
+    var isTypingNote by remember { mutableStateOf(false) }
+    var restockFlag by remember(initialRestocked) { mutableStateOf(initialRestocked) }
+
+    // Editable order & table specification state (updated when DB fetch completes)
+    var customerInput by remember { mutableStateOf(payload.customer.orEmpty()) }
+    var districtInput by remember { mutableStateOf(payload.district.orEmpty()) }
+    var copyInput by remember { mutableStateOf(DispatchRepository.normalizeCopyType(payload.copy)) }
+    var sizeInput by remember { mutableStateOf(payload.resolvedSize.orEmpty()) }
+    var qtyInput by remember { mutableStateOf((payload.resolvedQty ?: 1).coerceAtLeast(1).toString()) }
+    var topColourInput by remember { mutableStateOf(payload.resolvedTopColour.orEmpty()) }
+    var frameColourInput by remember { mutableStateOf(payload.resolvedFrameColour.orEmpty()) }
+    var legSizeInput by remember { mutableStateOf(payload.resolvedLegSize.orEmpty()) }
+    var legHeightInput by remember { mutableStateOf(payload.resolvedLegHeight.orEmpty()) }
+    var legShapeInput by remember { mutableStateOf(payload.resolvedLegShape.orEmpty()) }
+    var selectedTableIdx by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(payload) {
+        customerInput = payload.customer.orEmpty()
+        districtInput = payload.district.orEmpty()
+        copyInput = DispatchRepository.normalizeCopyType(payload.copy)
+        sizeInput = payload.resolvedSize.orEmpty()
+        qtyInput = (payload.resolvedQty ?: 1).coerceAtLeast(1).toString()
+        topColourInput = payload.resolvedTopColour.orEmpty()
+        frameColourInput = payload.resolvedFrameColour.orEmpty()
+        legSizeInput = payload.resolvedLegSize.orEmpty()
+        legHeightInput = payload.resolvedLegHeight.orEmpty()
+        legShapeInput = payload.resolvedLegShape.orEmpty()
+    }
+
+    val scannedCopy = DispatchRepository.normalizeCopyType(copyInput)
     val isGatePass = DispatchRepository.isGatePassCopy(scannedCopy)
     val accentColor = if (isReturnMode) ReturnAmber else DispatchIndigo
-    val scanTimeSlst = remember(payload) { DispatchRepository.formatSriLankaDateTime() }
+    val scanTimeSlst = remember(payload.orderNo) { DispatchRepository.formatSriLankaDateTime() }
 
-    val progressAnim = remember(payload) { Animatable(1f) }
-    LaunchedEffect(payload) {
-        progressAnim.animateTo(
-            targetValue = 0f,
-            animationSpec = tween(durationMillis = 5000, easing = LinearEasing)
+    val buildEditedPayload: () -> QrPayload = {
+        val parsedQty = qtyInput.trim().toIntOrNull()?.coerceAtLeast(1) ?: (payload.resolvedQty ?: 1).coerceAtLeast(1)
+        val totalUnitsVal = (payload.resolvedTotalUnits ?: parsedQty).coerceAtLeast(parsedQty)
+        payload.copy(
+            customer = customerInput.trim().ifBlank { "Factory Order" },
+            district = districtInput.trim().ifBlank { "Colombo" },
+            copy = scannedCopy,
+            size = sizeInput.trim(),
+            tableSize = sizeInput.trim(),
+            qty = parsedQty,
+            totalUnits = totalUnitsVal,
+            tableCount = totalUnitsVal,
+            tableIndex = (selectedTableIdx + 1).coerceAtLeast(1),
+            topColour = topColourInput.trim(),
+            frameColour = frameColourInput.trim(),
+            legSize = legSizeInput.trim(),
+            legHeight = legHeightInput.trim(),
+            legShape = legShapeInput.trim()
         )
-        onConfirm()
+    }
+
+    val triggerConfirm = {
+        val updated = buildEditedPayload()
+        if (onConfirmWithEdits != null) {
+            onConfirmWithEdits(updated, noteText.trim(), restockFlag)
+        } else {
+            onConfirm()
+        }
+    }
+
+    // Hold countdown when user enters note typing, edits order details, or during manual order entry
+    val isCountdownHeld = isTypingNote || isEditingDetails || isManualConfirmation || isFetchingManualOrder
+
+    val progressAnim = remember(payload.orderNo) { Animatable(1f) }
+    LaunchedEffect(isCountdownHeld, payload.orderNo) {
+        if (isCountdownHeld) {
+            progressAnim.stop()
+        } else {
+            val remainingMs = (progressAnim.value * 5000f).toInt().coerceAtLeast(250)
+            progressAnim.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = remainingMs, easing = LinearEasing)
+            )
+            if (progressAnim.value <= 0.01f && !isCountdownHeld) {
+                triggerConfirm()
+            }
+        }
     }
 
     val secondsLeft = ceil(progressAnim.value * 5f).toInt().coerceIn(1, 5)
@@ -625,7 +712,7 @@ fun AutoConfirmScanSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f))
+            .background(Color.Black.copy(alpha = 0.45f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -638,10 +725,12 @@ fun AutoConfirmScanSheet(
             shadowElevation = 16.dp,
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 720.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {}
+                .testTag("auto_confirm_scan_sheet")
         ) {
             Column(
                 modifier = Modifier
@@ -658,177 +747,677 @@ fun AutoConfirmScanSheet(
                         .background(Color(0xFFD1D1D6), RoundedCornerShape(3.dp))
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Top Countdown Ring + Title
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier.size(38.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val strokeW = 3.dp.toPx()
-                            drawCircle(
-                                color = accentColor.copy(alpha = 0.18f),
-                                style = Stroke(width = strokeW)
-                            )
-                            drawArc(
-                                color = accentColor,
-                                startAngle = -90f,
-                                sweepAngle = 360f * progressAnim.value,
-                                useCenter = false,
-                                style = Stroke(width = strokeW, cap = StrokeCap.Round)
-                            )
-                        }
-                        Text(
-                            text = "$secondsLeft",
-                            fontFamily = InterFontFamily,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
-                            color = accentColor
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            text = if (isReturnMode) "QR SCANNED · RETURN" else "QR SCANNED · DISPATCH",
-                            fontFamily = InterFontFamily,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 11.sp,
-                            color = accentColor,
-                            letterSpacing = 0.5.sp
-                        )
-                        Text(
-                            text = when {
-                                isReturnMode -> "Confirm Return & Restock"
-                                isGatePass -> "Confirm Dispatch"
-                                else -> "Confirm Copy Scan"
-                            },
-                            fontFamily = InterFontFamily,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 22.sp,
-                            color = Neutral900,
-                            letterSpacing = (-0.4).sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Order No + Copy Badge Row
+                // Top Countdown Ring + Title + Edit Toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "#${payload.orderNo ?: "N/A"}",
-                        fontFamily = InterFontFamily,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 34.sp,
-                        color = Neutral900,
-                        letterSpacing = (-0.8).sp
-                    )
-                    CopyTypeBadge(copyName = scannedCopy)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("countdown_indicator_box"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val strokeW = 3.dp.toPx()
+                                drawCircle(
+                                    color = accentColor.copy(alpha = 0.18f),
+                                    style = Stroke(width = strokeW)
+                                )
+                                drawArc(
+                                    color = accentColor,
+                                    startAngle = -90f,
+                                    sweepAngle = if (isCountdownHeld) 360f else 360f * progressAnim.value,
+                                    useCenter = false,
+                                    style = Stroke(width = strokeW, cap = StrokeCap.Round)
+                                )
+                            }
+                            if (isCountdownHeld) {
+                                Icon(
+                                    imageVector = Icons.Default.Pause,
+                                    contentDescription = "Countdown Held",
+                                    tint = accentColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = "$secondsLeft",
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp,
+                                    color = accentColor
+                                )
+                            }
+                        }
+
+                        Column {
+                            Text(
+                                text = when {
+                                    isManualConfirmation && isReturnMode -> "MANUAL ENTRY · RETURN"
+                                    isManualConfirmation -> "MANUAL ENTRY · DISPATCH"
+                                    isReturnMode -> "QR SCANNED · RETURN"
+                                    else -> "QR SCANNED · DISPATCH"
+                                },
+                                fontFamily = InterFontFamily,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp,
+                                color = accentColor,
+                                letterSpacing = 0.5.sp
+                            )
+                            Text(
+                                text = when {
+                                    isReturnMode -> "Confirm Return & Restock"
+                                    isGatePass -> "Confirm Dispatch"
+                                    else -> "Confirm Copy Scan"
+                                },
+                                fontFamily = InterFontFamily,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 20.sp,
+                                color = Neutral900,
+                                letterSpacing = (-0.4).sp
+                            )
+                        }
+                    }
+
+                    // Edit / Done Editing pill button
+                    Surface(
+                        onClick = {
+                            isEditingDetails = !isEditingDetails
+                            if (!isEditingDetails) {
+                                focusManager.clearFocus()
+                            }
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (isEditingDetails) accentColor.copy(alpha = 0.14f) else TertiaryFill,
+                        modifier = Modifier.testTag("toggle_edit_order_details_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isEditingDetails) Icons.Default.Check else Icons.Default.Edit,
+                                contentDescription = "Toggle Edit Details",
+                                tint = if (isEditingDetails) accentColor else Neutral900,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (isEditingDetails) "Done" else "Edit",
+                                fontFamily = InterFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = if (isEditingDetails) accentColor else Neutral900
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                HairlineDivider()
 
-                // Customer Row
-                SheetKeyValueRow(
-                    label = "Customer",
-                    value = payload.customer?.ifBlank { "Factory Order" } ?: "Factory Order"
-                )
-                HairlineDivider()
-
-                // Units Row
-                val unitCount = payload.totalUnits ?: payload.qty ?: 1
-                SheetKeyValueRow(
-                    label = "Units",
-                    value = "$unitCount ${if (unitCount == 1) "table" else "tables"}"
-                )
-                HairlineDivider()
-
-                // Vehicle / Driver Row
-                if (isReturnMode || isGatePass) {
-                    SheetKeyValueRow(
-                        label = "Vehicle",
-                        value = effectiveVehicle
-                    )
-                } else {
-                    SheetKeyValueRow(
-                        label = "Driver",
-                        value = "Unchanged",
-                        valueColor = SecondaryLabel
-                    )
-                }
-
-                if (isReturnMode) {
-                    HairlineDivider()
-                    SheetKeyValueRow(
-                        label = "Restock",
-                        value = "Yes · back to stock",
-                        valueColor = RestockedEmerald
-                    )
-                }
-
-                HairlineDivider()
-                SheetKeyValueRow(
-                    label = "Time (Sri Lanka)",
-                    value = scanTimeSlst
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Action Callout Box
-                val calloutBg = when {
-                    isReturnMode -> ReturnAmberTint
-                    isGatePass -> DispatchIndigoTint
-                    else -> Color(0xFFF4F4F5)
-                }
-                val calloutBorder = when {
-                    isReturnMode -> Color(0xFFFDE68A)
-                    isGatePass -> Color(0xFFC7D2FE)
-                    else -> Color(0xFFE4E4E7)
-                }
-                val calloutTextColor = when {
-                    isReturnMode -> ReturnAmberText
-                    isGatePass -> DispatchIndigoText
-                    else -> Neutral900
-                }
-                val calloutText = when {
-                    isReturnMode -> "Mark returned & restock ($scannedCopy)"
-                    isGatePass -> "Assign order to $effectiveVehicle &\nrecord GATE PASS"
-                    else -> "Record $scannedCopy only — does not\nassign a driver"
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = calloutBg,
-                    border = BorderStroke(1.dp, calloutBorder),
-                    modifier = Modifier.fillMaxWidth()
+                // Scrollable middle body for order details, editable fields, and note input
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    Text(
-                        text = calloutText,
-                        fontFamily = InterFontFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        color = calloutTextColor,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
-                    )
+                    // Order No + Copy Badge Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "#${payload.orderNo ?: "N/A"}",
+                            fontFamily = InterFontFamily,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 30.sp,
+                            color = Neutral900,
+                            letterSpacing = (-0.8).sp
+                        )
+                        CopyTypeBadge(copyName = scannedCopy)
+                    }
+
+                    // Database Fetch Status Banner for Manual Order Entry
+                    if (isManualConfirmation) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val dbStatusBg = when {
+                            isFetchingManualOrder -> DispatchIndigoTint
+                            manualOrderFoundInDb -> RestockedEmeraldTint
+                            else -> ReturnAmberTint
+                        }
+                        val dbStatusColor = when {
+                            isFetchingManualOrder -> DispatchIndigoText
+                            manualOrderFoundInDb -> RestockedEmerald
+                            else -> ReturnAmberText
+                        }
+                        val dbStatusText = when {
+                            isFetchingManualOrder -> "Fetching order #${payload.orderNo} details from database..."
+                            manualOrderFoundInDb -> "Order details fetched from database · Edit any field below before confirming."
+                            else -> "Order #${payload.orderNo} not in database · Enter or edit order details manually below."
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = dbStatusBg,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("manual_order_db_status_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (isFetchingManualOrder) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = dbStatusColor
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (manualOrderFoundInDb) Icons.Default.CloudDone else Icons.Default.EditNote,
+                                        contentDescription = null,
+                                        tint = dbStatusColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Text(
+                                    text = dbStatusText,
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    color = dbStatusColor
+                                )
+                            }
+                        }
+                    }
+
+                    // Multi-table selector chips when an order has multiple tables in `order_tables`
+                    if (manualOrderTables.size > 1) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "SELECT TABLE UNIT (${manualOrderTables.size} IN ORDER)",
+                            fontFamily = InterFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = SecondaryLabel,
+                            letterSpacing = 0.4.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            manualOrderTables.forEachIndexed { idx, tableRow ->
+                                val selected = selectedTableIdx == idx
+                                val chipLabel = buildString {
+                                    append("Table ${idx + 1}: ")
+                                    append(tableRow.table_size?.ifBlank { "Standard" } ?: "Standard")
+                                    if (!tableRow.top_colour.isNullOrBlank()) {
+                                        append(" (${tableRow.top_colour})")
+                                    }
+                                }
+                                Surface(
+                                    onClick = {
+                                        selectedTableIdx = idx
+                                        sizeInput = tableRow.table_size.orEmpty()
+                                        qtyInput = (tableRow.quantity ?: 1).coerceAtLeast(1).toString()
+                                        topColourInput = tableRow.top_colour.orEmpty()
+                                        frameColourInput = tableRow.frame_colour.orEmpty()
+                                        legSizeInput = tableRow.leg_size.orEmpty()
+                                        legHeightInput = tableRow.leg_height.orEmpty()
+                                        legShapeInput = tableRow.leg_shape.orEmpty()
+                                    },
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (selected) accentColor else TertiaryFill,
+                                    modifier = Modifier.testTag("manual_table_chip_$idx")
+                                ) {
+                                    Text(
+                                        text = chipLabel,
+                                        fontFamily = InterFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = if (selected) (if (isReturnMode) ReturnAmberInk else Color.White) else Neutral900,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HairlineDivider()
+
+                    if (isEditingDetails) {
+                        // Editable Order & Table Specification Form
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "ORDER & TABLE DETAILS (EDITABLE)",
+                            fontFamily = InterFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = SecondaryLabel,
+                            letterSpacing = 0.4.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Copy Type Selector Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("GATE PASS", "TRANSPORT COPY", "ACCOUNT COPY").forEach { copyOption ->
+                                val isSelectedCopy = scannedCopy.equals(copyOption, ignoreCase = true)
+                                Surface(
+                                    onClick = { copyInput = copyOption },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelectedCopy) Neutral900 else TertiaryFill,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = copyOption,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        color = if (isSelectedCopy) Color.White else Neutral900,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Row 1: Customer & District
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = customerInput,
+                                onValueChange = { customerInput = it },
+                                label = { Text("Customer", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("confirm_edit_customer_input")
+                            )
+                            OutlinedTextField(
+                                value = districtInput,
+                                onValueChange = { districtInput = it },
+                                label = { Text("District", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("confirm_edit_district_input")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Row 2: Table Size & Quantity
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = sizeInput,
+                                onValueChange = { sizeInput = it },
+                                label = { Text("Table Size (e.g. 30x60)", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1.3f)
+                                    .testTag("confirm_edit_size_input")
+                            )
+                            OutlinedTextField(
+                                value = qtyInput,
+                                onValueChange = { qtyInput = it.filter { ch -> ch.isDigit() } },
+                                label = { Text("Qty", fontSize = 12.sp) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(0.7f)
+                                    .testTag("confirm_edit_qty_input")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Row 3: Top Colour & Leg/Frame Colour
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = topColourInput,
+                                onValueChange = { topColourInput = it },
+                                label = { Text("Top Colour", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("confirm_edit_top_colour_input")
+                            )
+                            OutlinedTextField(
+                                value = frameColourInput,
+                                onValueChange = { frameColourInput = it },
+                                label = { Text("Leg Colour", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("confirm_edit_frame_colour_input")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Row 4: Leg Size, Leg Height, Leg Shape
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = legSizeInput,
+                                onValueChange = { legSizeInput = it },
+                                label = { Text("Leg Size", fontSize = 11.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("confirm_edit_leg_size_input")
+                            )
+                            OutlinedTextField(
+                                value = legHeightInput,
+                                onValueChange = { legHeightInput = it },
+                                label = { Text("Height", fontSize = 11.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(0.85f)
+                                    .testTag("confirm_edit_leg_height_input")
+                            )
+                            OutlinedTextField(
+                                value = legShapeInput,
+                                onValueChange = { legShapeInput = it },
+                                label = { Text("Leg Shape", fontSize = 11.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1.15f)
+                                    .testTag("confirm_edit_leg_shape_input")
+                            )
+                        }
+
+                        if (isReturnMode) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Restock to inventory",
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 15.sp,
+                                    color = Neutral900
+                                )
+                                IosSwitch(
+                                    checked = restockFlag,
+                                    onCheckedChange = { restockFlag = it },
+                                    activeColor = RestockedEmerald
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        HairlineDivider()
+                    } else {
+                        // Standard Compact Summary Rows
+                        SheetKeyValueRow(
+                            label = "Customer",
+                            value = customerInput.ifBlank { "Factory Order" }
+                        )
+                        HairlineDivider()
+
+                        if (districtInput.isNotBlank()) {
+                            SheetKeyValueRow(
+                                label = "District",
+                                value = districtInput
+                            )
+                            HairlineDivider()
+                        }
+
+                        val dispatchedQty = (qtyInput.toIntOrNull() ?: (payload.resolvedQty ?: 1)).coerceAtLeast(1)
+                        val totalOrderUnits = (payload.resolvedTotalUnits ?: dispatchedQty).coerceAtLeast(dispatchedQty)
+                        val scannedSize = sizeInput.trim()
+                        if (scannedSize.isNotBlank()) {
+                            SheetKeyValueRow(
+                                label = "Table size",
+                                value = "$scannedSize · Qty $dispatchedQty${if (totalOrderUnits > dispatchedQty) " (of $totalOrderUnits)" else ""}"
+                            )
+                            HairlineDivider()
+                        } else {
+                            SheetKeyValueRow(
+                                label = "Units",
+                                value = "$dispatchedQty ${if (dispatchedQty == 1) "table" else "tables"}"
+                            )
+                            HairlineDivider()
+                        }
+
+                        val featureDetails = listOfNotNull(
+                            topColourInput.takeIf { it.isNotBlank() }?.let { "$it top" },
+                            frameColourInput.takeIf { it.isNotBlank() }?.let { "$it leg" },
+                            legSizeInput.takeIf { it.isNotBlank() },
+                            legShapeInput.takeIf { it.isNotBlank() },
+                            legHeightInput.takeIf { it.isNotBlank() }?.let { "H:$it" }
+                        ).joinToString(" · ")
+                        if (featureDetails.isNotBlank()) {
+                            SheetKeyValueRow(
+                                label = "Features",
+                                value = featureDetails
+                            )
+                            HairlineDivider()
+                        }
+
+                        if (isReturnMode || isGatePass) {
+                            SheetKeyValueRow(
+                                label = "Vehicle",
+                                value = effectiveVehicle
+                            )
+                        } else {
+                            SheetKeyValueRow(
+                                label = "Driver",
+                                value = "Unchanged",
+                                valueColor = SecondaryLabel
+                            )
+                        }
+
+                        if (isReturnMode) {
+                            HairlineDivider()
+                            SheetKeyValueRow(
+                                label = "Restock",
+                                value = if (restockFlag) "Yes · back to stock" else "No · do not restock",
+                                valueColor = if (restockFlag) RestockedEmerald else SecondaryLabel
+                            )
+                        }
+
+                        HairlineDivider()
+                        SheetKeyValueRow(
+                            label = "Time (Sri Lanka)",
+                            value = scanTimeSlst
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Order Note Input Field (Entering note typing holds countdown until Done)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("confirm_order_note_section")
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "ORDER NOTE (OPTIONAL)",
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    color = SecondaryLabel,
+                                    letterSpacing = 0.4.sp
+                                )
+                                if (isTypingNote) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = ReturnAmberTint
+                                    ) {
+                                        Text(
+                                            text = "TIMER PAUSED",
+                                            fontFamily = InterFontFamily,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 9.sp,
+                                            color = ReturnAmberText,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (isTypingNote) {
+                                Text(
+                                    text = "Done typing",
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = accentColor,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            isTypingNote = false
+                                            focusManager.clearFocus()
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .testTag("confirm_note_done_button")
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        OutlinedTextField(
+                            value = noteText,
+                            onValueChange = {
+                                noteText = it
+                                isTypingNote = true
+                            },
+                            placeholder = {
+                                Text(
+                                    text = "Add a note about this order (holds countdown)...",
+                                    fontFamily = InterFontFamily,
+                                    fontSize = 13.sp,
+                                    color = Neutral400
+                                )
+                            },
+                            singleLine = false,
+                            maxLines = 2,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(
+                                onDone = {
+                                    isTypingNote = false
+                                    focusManager.clearFocus()
+                                }
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { focusState ->
+                                    if (focusState.isFocused) {
+                                        isTypingNote = true
+                                    }
+                                }
+                                .testTag("confirm_note_input")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Action Callout Box
+                    val calloutBg = when {
+                        isReturnMode -> ReturnAmberTint
+                        isGatePass -> DispatchIndigoTint
+                        else -> Color(0xFFF4F4F5)
+                    }
+                    val calloutBorder = when {
+                        isReturnMode -> Color(0xFFFDE68A)
+                        isGatePass -> Color(0xFFC7D2FE)
+                        else -> Color(0xFFE4E4E7)
+                    }
+                    val calloutTextColor = when {
+                        isReturnMode -> ReturnAmberText
+                        isGatePass -> DispatchIndigoText
+                        else -> Neutral900
+                    }
+                    val calloutText = when {
+                        isReturnMode -> "Mark returned${if (restockFlag) " & restock" else ""} ($scannedCopy)"
+                        isGatePass -> "Assign order to $effectiveVehicle &\nrecord GATE PASS"
+                        else -> "Record $scannedCopy only — does not\nassign a driver"
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = calloutBg,
+                        border = BorderStroke(1.dp, calloutBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = calloutText,
+                            fontFamily = InterFontFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = calloutTextColor,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Draining Primary Confirm Button
+                // Draining / Held Primary Confirm Button
                 val baseButtonColor = if (isReturnMode) Color(0xFFB45309) else Color(0xFF3730A3)
                 val fillButtonColor = if (isReturnMode) ReturnAmber else DispatchIndigo
                 val buttonText = when {
+                    isCountdownHeld && isReturnMode -> "Confirm Return"
+                    isCountdownHeld && isGatePass -> "Confirm Dispatch"
+                    isCountdownHeld -> "Record Scan"
                     isReturnMode -> "Confirm Return (${secondsLeft}s)"
                     isGatePass -> "Confirm Dispatch (${secondsLeft}s)"
                     else -> "Record Scan (${secondsLeft}s)"
@@ -837,17 +1426,24 @@ fun AutoConfirmScanSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
+                        .height(54.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(baseButtonColor)
                         .drawWithContent {
                             drawRect(
                                 color = fillButtonColor,
-                                size = Size(size.width * progressAnim.value, size.height)
+                                size = Size(
+                                    if (isCountdownHeld) size.width else size.width * progressAnim.value,
+                                    size.height
+                                )
                             )
                             drawContent()
                         }
-                        .clickable { onConfirm() },
+                        .clickable {
+                            focusManager.clearFocus()
+                            triggerConfirm()
+                        }
+                        .testTag("confirm_scan_sheet_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -859,23 +1455,27 @@ fun AutoConfirmScanSheet(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Cancel Button
                 Surface(
-                    onClick = onCancel,
+                    onClick = {
+                        focusManager.clearFocus()
+                        onCancel()
+                    },
                     shape = RoundedCornerShape(14.dp),
                     color = TertiaryFill,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(48.dp)
+                        .testTag("cancel_scan_sheet_button")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
                             text = "Cancel",
                             fontFamily = InterFontFamily,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 17.sp,
+                            fontSize = 16.sp,
                             color = Neutral900
                         )
                     }
@@ -917,14 +1517,18 @@ private fun SheetKeyValueRow(
 @Composable
 fun RecordDetailScreen(
     record: ScannedRecord,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onSaveNote: ((String) -> Unit)? = null
 ) {
     BackHandler { onBack() }
     val clipboardManager = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
     val scannedStr = remember(record.scannedAt) {
         "${DispatchRepository.formatSriLankaDateTime(record.scannedAt)} (SLST)"
     }
     val statusUpper = record.syncStatus.uppercase()
+    var noteDraft by remember(record.id, record.notes) { mutableStateOf(record.notes) }
+    var noteSavedFeedback by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -1055,6 +1659,78 @@ fun RecordDetailScreen(
                 }
             }
 
+            // ORDER NOTE Group (Add or edit note in History Detail)
+            Column {
+                SectionHeaderLabel(text = "ORDER NOTE")
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CellWhite,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = noteDraft,
+                            onValueChange = {
+                                noteDraft = it
+                                noteSavedFeedback = false
+                            },
+                            placeholder = {
+                                Text(
+                                    text = "Add a note about this order...",
+                                    fontFamily = InterFontFamily,
+                                    fontSize = 14.sp,
+                                    color = Neutral400
+                                )
+                            },
+                            maxLines = 3,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("detail_record_note_input")
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (noteSavedFeedback) "Note saved & synced" else "Saved to history & dispatch log",
+                                fontFamily = InterFontFamily,
+                                fontWeight = if (noteSavedFeedback) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 12.sp,
+                                color = if (noteSavedFeedback) RestockedEmerald else SecondaryLabel
+                            )
+                            Button(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    onSaveNote?.invoke(noteDraft.trim())
+                                    noteSavedFeedback = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = DispatchIndigo),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .height(38.dp)
+                                    .testTag("detail_save_note_button")
+                            ) {
+                                Text(
+                                    text = "Save Note",
+                                    fontFamily = InterFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // OPERATION Group
             Column {
                 SectionHeaderLabel(text = "OPERATION")
@@ -1158,10 +1834,31 @@ fun RecordDetailScreen(
                         )
                         HairlineDivider()
                         DetailGroupRow(
-                            label = "Frame powder",
+                            label = "Frame / leg colour",
                             value = record.frameColour.ifBlank { "Matte Black" },
                             colorDot = Color(0xFF1F2937)
                         )
+                        if (record.legSize.isNotBlank()) {
+                            HairlineDivider()
+                            DetailGroupRow(
+                                label = "Leg size",
+                                value = record.legSize
+                            )
+                        }
+                        if (record.legHeight.isNotBlank()) {
+                            HairlineDivider()
+                            DetailGroupRow(
+                                label = "Leg height",
+                                value = record.legHeight
+                            )
+                        }
+                        if (record.legShape.isNotBlank()) {
+                            HairlineDivider()
+                            DetailGroupRow(
+                                label = "Leg shape",
+                                value = record.legShape
+                            )
+                        }
                         HairlineDivider()
                         DetailGroupRow(
                             label = "Quantity",
@@ -1185,17 +1882,19 @@ fun RecordDetailScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Duplicate key",
+                                text = "Combined duplicate key (7 table features)",
                                 fontFamily = InterFontFamily,
                                 fontSize = 12.sp,
                                 color = SecondaryLabel
                             )
                             Spacer(modifier = Modifier.height(3.dp))
                             Text(
-                                text = "${record.orderNo} | ${record.copy} | ${if (record.mode.equals("RETURN", true)) "returned" else "dispatched"}",
+                                text = record.duplicateKey.ifBlank {
+                                    "${record.orderNo} | ${record.copy} | ${record.size}"
+                                },
                                 fontFamily = JetBrainsMonoFontFamily,
                                 fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 color = Neutral900
                             )
                         }

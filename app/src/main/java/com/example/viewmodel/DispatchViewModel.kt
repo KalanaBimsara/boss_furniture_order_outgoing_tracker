@@ -14,6 +14,7 @@ import android.os.Vibrator
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.api.SupabaseApiClient
+import com.example.data.api.SupabaseOrderTable
 import com.example.data.local.AppDatabase
 import com.example.data.local.ScannedRecord
 import com.example.data.model.QrPayload
@@ -131,6 +132,22 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
     private val _rejectTriggerCount = MutableStateFlow(0)
     val rejectTriggerCount: StateFlow<Int> = _rejectTriggerCount.asStateFlow()
 
+    // Manual Confirmation & Note State for Confirmation Sheet
+    private val _isManualConfirmation = MutableStateFlow(false)
+    val isManualConfirmation: StateFlow<Boolean> = _isManualConfirmation.asStateFlow()
+
+    private val _isFetchingManualOrder = MutableStateFlow(false)
+    val isFetchingManualOrder: StateFlow<Boolean> = _isFetchingManualOrder.asStateFlow()
+
+    private val _manualOrderFoundInDb = MutableStateFlow(true)
+    val manualOrderFoundInDb: StateFlow<Boolean> = _manualOrderFoundInDb.asStateFlow()
+
+    private val _manualOrderTables = MutableStateFlow<List<SupabaseOrderTable>>(emptyList())
+    val manualOrderTables: StateFlow<List<SupabaseOrderTable>> = _manualOrderTables.asStateFlow()
+
+    private val _confirmationNote = MutableStateFlow("")
+    val confirmationNote: StateFlow<String> = _confirmationNote.asStateFlow()
+
     // Top Toast state (drops in from top for 2.6s on success or offline queue)
     private val _activeToast = MutableStateFlow<ToastNotice?>(null)
     val activeToast: StateFlow<ToastNotice?> = _activeToast.asStateFlow()
@@ -241,7 +258,9 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                         it.customer.contains(query, ignoreCase = true) ||
                         it.district.contains(query, ignoreCase = true) ||
                         it.vehicleNumber.contains(query, ignoreCase = true) ||
-                        it.copy.contains(query, ignoreCase = true)
+                        it.copy.contains(query, ignoreCase = true) ||
+                        it.size.contains(query, ignoreCase = true) ||
+                        it.notes.contains(query, ignoreCase = true)
                 }
             }
         }.stateIn(
@@ -426,7 +445,13 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         mode: String,
         orderNo: String,
         copyName: String,
-        tableIndex: Int = 1
+        tableIndex: Int = 1,
+        size: String = "",
+        topColour: String = "",
+        frameColour: String = "",
+        legSize: String = "",
+        legHeight: String = "",
+        legShape: String = ""
     ): String? {
         val normalizedOrder = DispatchRepository.normalizeOrderNo(orderNo)
         if (normalizedOrder.isEmpty()) return null
@@ -434,12 +459,31 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         val isReturn = mode.equals("RETURN", ignoreCase = true)
 
         val matchingRecords = allRecordsState.value.filter { record ->
-            DispatchRepository.normalizeOrderNo(record.orderNo).equals(normalizedOrder, ignoreCase = true) &&
-                record.syncStatus != "FAILED" &&
+            record.syncStatus != "FAILED" &&
                 record.syncStatus != "DUPLICATE" &&
-                DispatchRepository.normalizeCopyType(record.copy) == normalizedCopy &&
-                record.tableIndex == tableIndex
+                DispatchRepository.hasSameTableFeatures(
+                    record = record,
+                    orderNo = normalizedOrder,
+                    copyName = normalizedCopy,
+                    size = size,
+                    topColour = topColour,
+                    frameColour = frameColour,
+                    legSize = legSize,
+                    legHeight = legHeight,
+                    legShape = legShape,
+                    tableIndex = tableIndex
+                )
         }
+
+        val featureSummary = DispatchRepository.formatTableFeatureDescriptor(
+            size = size,
+            topColour = topColour,
+            frameColour = frameColour,
+            legSize = legSize,
+            legHeight = legHeight,
+            legShape = legShape
+        )
+        val labelSuffix = if (featureSummary.isNotBlank()) " ($featureSummary)" else ""
 
         return if (!isReturn) {
             val alreadyDispatched = matchingRecords.firstOrNull {
@@ -447,7 +491,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             }
             if (alreadyDispatched != null) {
                 val timeStr = DispatchRepository.formatSriLankaDateTime(alreadyDispatched.scannedAt)
-                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already ${if (alreadyDispatched.mode.equals("RETURN", ignoreCase = true)) "returned" else "dispatched"}.\nFirst scan at $timeStr (SLST) · ${alreadyDispatched.scannerName.ifBlank { _scannerName.value }}"
+                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder$labelSuffix was already ${if (alreadyDispatched.mode.equals("RETURN", ignoreCase = true)) "returned" else "dispatched"}.\nFirst scan at $timeStr (SLST) · ${alreadyDispatched.scannerName.ifBlank { _scannerName.value }}"
             } else {
                 null
             }
@@ -457,7 +501,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             }
             if (alreadyReturned != null) {
                 val timeStr = DispatchRepository.formatSriLankaDateTime(alreadyReturned.scannedAt)
-                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder was already returned.\nReturned at $timeStr (SLST) · ${alreadyReturned.scannerName.ifBlank { _scannerName.value }}"
+                "Duplicate Denied: $normalizedCopy for Order #$normalizedOrder$labelSuffix was already returned.\nReturned at $timeStr (SLST) · ${alreadyReturned.scannerName.ifBlank { _scannerName.value }}"
             } else {
                 null
             }
@@ -541,12 +585,19 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        // Strict local duplicate check for both DISPATCH (once per copy) and RETURN (once per copy)
+        // Strict local duplicate check using combined 7-feature key:
+        // (orderNo, size, topColour, frameColour, legSize, legHeight, legShape) + copyName
         val localDupErr = findLocalDuplicateError(
             mode = modeStr,
             orderNo = orderNo,
             copyName = normalizedCopy,
-            tableIndex = tableIdx
+            tableIndex = tableIdx,
+            size = normalizedPayload.resolvedSize,
+            topColour = normalizedPayload.resolvedTopColour,
+            frameColour = normalizedPayload.resolvedFrameColour,
+            legSize = normalizedPayload.resolvedLegSize,
+            legHeight = normalizedPayload.resolvedLegHeight,
+            legShape = normalizedPayload.resolvedLegShape
         )
         if (localDupErr != null) {
             _scanError.value = localDupErr
@@ -557,6 +608,11 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         }
 
         _scanError.value = null
+        _isManualConfirmation.value = false
+        _isFetchingManualOrder.value = false
+        _manualOrderFoundInDb.value = true
+        _manualOrderTables.value = emptyList()
+        _confirmationNote.value = ""
         _scannedPayload.value = normalizedPayload
         _rawPayload.value = rawContent
         triggerFeedback(context)
@@ -572,9 +628,35 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
     fun clearScannedData() {
         _scannedPayload.value = null
         _rawPayload.value = null
+        _isManualConfirmation.value = false
+        _isFetchingManualOrder.value = false
+        _manualOrderFoundInDb.value = true
+        _manualOrderTables.value = emptyList()
+        _confirmationNote.value = ""
     }
 
-    // Process Manual Dispatch by typing Order Number (dispatches GATE PASS and assigns order to driver)
+    fun setConfirmationNote(note: String) {
+        _confirmationNote.value = note
+    }
+
+    fun updateScannedPayloadDraft(updated: QrPayload) {
+        _scannedPayload.value = updated
+    }
+
+    fun updateRecordNote(record: ScannedRecord, newNote: String, onSaved: (ScannedRecord) -> Unit = {}) {
+        viewModelScope.launch {
+            val updated = repository.updateRecordNote(record, newNote)
+            onSaved(updated)
+            showTopToast(
+                title = "Note saved · #${record.orderNo}",
+                subtitle = updated.notes.ifBlank { "Note cleared" },
+                isOffline = false
+            )
+        }
+    }
+
+    // Process Manual Dispatch by typing Order Number:
+    // Opens the confirmation popup, fetches order & table details from Supabase, and lets the user edit details & add a note before confirming.
     fun processManualDispatch(context: Context) {
         val orderNo = DispatchRepository.normalizeOrderNo(_manualDispatchOrderInput.value)
         if (orderNo.isBlank()) {
@@ -591,95 +673,41 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        val inMemoryDup = findLocalDuplicateError(
-            mode = "DISPATCH",
-            orderNo = orderNo,
-            copyName = copyType,
-            tableIndex = 1
-        )
-        if (inMemoryDup != null) {
-            _manualDispatchStatus.value = inMemoryDup
-            _scanError.value = inMemoryDup
-            _rejectTriggerCount.value += 1
-            triggerDuplicateFeedback(context)
-            return
-        }
+        _scanError.value = null
+        _manualDispatchStatus.value = null
+        _isManualConfirmation.value = true
+        _isFetchingManualOrder.value = true
+        _manualOrderFoundInDb.value = false
+        _manualOrderTables.value = emptyList()
+        _confirmationNote.value = ""
 
-        val effectiveVehicle = getEffectiveVehicleNumber()
-        _isProcessingDispatch.value = true
-        _manualDispatchStatus.value = "Assigning Order #$orderNo (GATE PASS) to $effectiveVehicle..."
-
-        val dispatchRecord = ScannedRecord(
-            scannerName = _scannerName.value,
-            deviceId = deviceId,
-            mode = "DISPATCH",
-            restocked = false,
-            vehicleNumber = effectiveVehicle,
-            notes = "",
+        val initialDraft = QrPayload(
             orderNo = orderNo,
             orderId = orderNo,
-            customer = "Factory Dispatch Order",
+            customer = "",
+            district = "",
             copy = copyType,
-            duplicateKey = DispatchRepository.buildDuplicateKey("DISPATCH", orderNo, copyType, 1),
-            rawPayload = "MANUAL_DISPATCH:$orderNo:$copyType",
-            syncStatus = "PENDING"
+            qty = 1,
+            totalUnits = 1,
+            tableIndex = 1,
+            tableCount = 1
         )
+        _scannedPayload.value = initialDraft
+        _rawPayload.value = "MANUAL_DISPATCH:$orderNo:$copyType"
 
         viewModelScope.launch {
-            val dbDup = repository.checkLocalDuplicate("DISPATCH", orderNo, copyType, 1)
-            if (dbDup != null) {
-                _isProcessingDispatch.value = false
-                _manualDispatchStatus.value = dbDup
-                _scanError.value = dbDup
-                _rejectTriggerCount.value += 1
-                triggerDuplicateFeedback(context)
-                return@launch
+            val fetched = repository.fetchOrderDetailsForManualEntry(orderNo, copyType)
+            if (_isManualConfirmation.value && _scannedPayload.value?.orderNo == orderNo) {
+                _scannedPayload.value = fetched.payload
+                _manualOrderTables.value = fetched.tables
+                _manualOrderFoundInDb.value = fetched.foundInDatabase
             }
-
-            val id = repository.insertRecord(dispatchRecord)
-            val savedRecord = dispatchRecord.copy(id = id)
-
-            val syncResult = repository.syncRecord(savedRecord)
-            _isProcessingDispatch.value = false
-
-            when (syncResult) {
-                is SyncStatusResult.Success -> {
-                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
-                    _manualDispatchStatus.value = "Order #$orderNo (GATE PASS) dispatched & assigned to $effectiveVehicle at $slTime (SLST)!"
-                    _manualDispatchOrderInput.value = ""
-                    showTopToast(
-                        title = "#$orderNo dispatched",
-                        subtitle = "GATE PASS · ${effectiveVehicle.replace("(", "· ").replace(")", "")} · $slTime",
-                        isOffline = false
-                    )
-                    triggerFeedback(context)
-                }
-                is SyncStatusResult.Offline -> {
-                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
-                    _manualDispatchStatus.value = "Saved locally (Offline) at $slTime (SLST). Order #$orderNo queued for $effectiveVehicle."
-                    _manualDispatchOrderInput.value = ""
-                    showTopToast(
-                        title = "Saved offline · #$orderNo",
-                        subtitle = "GATE PASS · $slTime (SLST) · syncs when online",
-                        isOffline = true
-                    )
-                    triggerFeedback(context)
-                }
-                is SyncStatusResult.Duplicate -> {
-                    _manualDispatchStatus.value = syncResult.message
-                    _scanError.value = syncResult.message
-                    _rejectTriggerCount.value += 1
-                    triggerDuplicateFeedback(context)
-                }
-                is SyncStatusResult.Failed -> {
-                    _manualDispatchStatus.value = "Alert: ${syncResult.message}"
-                    triggerErrorFeedback(context)
-                }
-            }
+            _isFetchingManualOrder.value = false
         }
     }
 
-    // Process Manual Return by typing Order Number
+    // Process Manual Return by typing Order Number:
+    // Opens the confirmation popup, fetches order & table details from Supabase, and lets the user edit details & add a note before confirming.
     fun processManualReturn(context: Context) {
         val orderNo = DispatchRepository.normalizeOrderNo(_manualOrderInput.value)
         if (orderNo.isBlank()) {
@@ -696,113 +724,81 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
         }
 
         val copyType = DispatchRepository.COPY_GATE_PASS
-        val inMemoryDup = findLocalDuplicateError(
-            mode = "RETURN",
-            orderNo = orderNo,
-            copyName = copyType,
-            tableIndex = 1
-        )
-        if (inMemoryDup != null) {
-            _manualReturnStatus.value = inMemoryDup
-            _scanError.value = inMemoryDup
-            _rejectTriggerCount.value += 1
-            triggerDuplicateFeedback(context)
-            return
-        }
+        _scanError.value = null
+        _manualReturnStatus.value = null
+        _isManualConfirmation.value = true
+        _isFetchingManualOrder.value = true
+        _manualOrderFoundInDb.value = false
+        _manualOrderTables.value = emptyList()
+        _confirmationNote.value = ""
 
-        val effectiveVehicle = getEffectiveVehicleNumber()
-        val restocked = _manualRestocked.value
-        _isProcessingReturn.value = true
-        _manualReturnStatus.value = "Processing return for Order #$orderNo via $effectiveVehicle..."
-
-        val returnRecord = ScannedRecord(
-            scannerName = _scannerName.value,
-            deviceId = deviceId,
-            mode = "RETURN",
-            restocked = restocked,
-            vehicleNumber = effectiveVehicle,
-            notes = "",
+        val initialDraft = QrPayload(
             orderNo = orderNo,
             orderId = orderNo,
-            customer = "Return Item",
+            customer = "",
+            district = "",
             copy = copyType,
-            duplicateKey = DispatchRepository.buildDuplicateKey("RETURN", orderNo, copyType, 1),
-            rawPayload = "MANUAL_RETURN:$orderNo",
-            syncStatus = "PENDING"
+            qty = 1,
+            totalUnits = 1,
+            tableIndex = 1,
+            tableCount = 1
         )
+        _scannedPayload.value = initialDraft
+        _rawPayload.value = "MANUAL_RETURN:$orderNo"
 
         viewModelScope.launch {
-            val dbDup = repository.checkLocalDuplicate("RETURN", orderNo, copyType, 1)
-            if (dbDup != null) {
-                _isProcessingReturn.value = false
-                _manualReturnStatus.value = dbDup
-                _scanError.value = dbDup
-                _rejectTriggerCount.value += 1
-                triggerDuplicateFeedback(context)
-                return@launch
+            val fetched = repository.fetchOrderDetailsForManualEntry(orderNo, copyType)
+            if (_isManualConfirmation.value && _scannedPayload.value?.orderNo == orderNo) {
+                _scannedPayload.value = fetched.payload
+                _manualOrderTables.value = fetched.tables
+                _manualOrderFoundInDb.value = fetched.foundInDatabase
             }
-
-            val id = repository.insertRecord(returnRecord)
-            val savedRecord = returnRecord.copy(id = id)
-
-            val syncResult = repository.syncRecord(savedRecord)
-            _isProcessingReturn.value = false
-
-            when (syncResult) {
-                is SyncStatusResult.Success -> {
-                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
-                    _manualReturnStatus.value = "Order #$orderNo recorded as RETURNED & RESTOCKED ($effectiveVehicle) at $slTime (SLST)!"
-                    _manualOrderInput.value = ""
-                    showTopToast(
-                        title = "#$orderNo returned",
-                        subtitle = "GATE PASS · $effectiveVehicle · $slTime",
-                        isOffline = false
-                    )
-                    triggerFeedback(context)
-                }
-                is SyncStatusResult.Offline -> {
-                    val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
-                    _manualReturnStatus.value = "Saved locally (Offline) at $slTime (SLST). Order #$orderNo marked returned ($effectiveVehicle)."
-                    _manualOrderInput.value = ""
-                    showTopToast(
-                        title = "Saved offline · #$orderNo",
-                        subtitle = "RETURN · $slTime (SLST) · syncs when online",
-                        isOffline = true
-                    )
-                    triggerFeedback(context)
-                }
-                is SyncStatusResult.Duplicate -> {
-                    _manualReturnStatus.value = syncResult.message
-                    _scanError.value = syncResult.message
-                    _rejectTriggerCount.value += 1
-                    triggerDuplicateFeedback(context)
-                }
-                is SyncStatusResult.Failed -> {
-                    _manualReturnStatus.value = "Alert: ${syncResult.message}"
-                    triggerErrorFeedback(context)
-                }
-            }
+            _isFetchingManualOrder.value = false
         }
     }
 
-    // Save scan outcome to Room DB and sync (handles both DISPATCH and RETURN modes)
-    fun recordDispatch(context: Context, onSuccess: () -> Unit, onDuplicate: (String) -> Unit) {
-        val payload = _scannedPayload.value ?: return
+    // Save scan outcome to Room DB and sync (handles both DISPATCH and RETURN modes, QR and Manual Confirmation)
+    fun recordDispatch(
+        context: Context,
+        onSuccess: () -> Unit = {},
+        onDuplicate: (String) -> Unit = {},
+        overridePayload: QrPayload? = null,
+        noteText: String? = null,
+        restockOverride: Boolean? = null
+    ) {
+        val payload = overridePayload ?: _scannedPayload.value ?: return
         val raw = _rawPayload.value ?: ""
+        val wasManual = _isManualConfirmation.value
+        val finalNote = (noteText ?: _confirmationNote.value).trim()
         val mode = _currentMode.value
         val effectiveVehicle = getEffectiveVehicleNumber()
-        val normalizedCopy = DispatchRepository.normalizeCopyType(payload.copy)
+        val normalizedCopy = DispatchRepository.normalizeCopyType(payload.resolvedCopy)
         val isGatePass = DispatchRepository.isGatePassCopy(normalizedCopy)
         val isReturn = mode == OperationMode.RETURN
+        val restockFlag = restockOverride ?: if (isReturn) _manualRestocked.value else false
         val modeStr = if (isReturn) "RETURN" else "DISPATCH"
-        val orderNo = payload.orderNo.orEmpty().trim()
-        val tableIdx = payload.tableIndex ?: 1
+        val orderNo = payload.resolvedOrderNo
+        val tableIdx = payload.resolvedTableIndex
+        val scannedSize = payload.resolvedSize
+        val scannedTopColour = payload.resolvedTopColour
+        val scannedFrameColour = payload.resolvedFrameColour
+        val scannedLegSize = payload.resolvedLegSize
+        val scannedLegHeight = payload.resolvedLegHeight
+        val scannedLegShape = payload.resolvedLegShape
+        val scannedQty = payload.resolvedQty
+        val scannedTotalUnits = payload.resolvedTotalUnits
 
         val localDupErr = findLocalDuplicateError(
             mode = modeStr,
             orderNo = orderNo,
             copyName = normalizedCopy,
-            tableIndex = tableIdx
+            tableIndex = tableIdx,
+            size = scannedSize,
+            topColour = scannedTopColour,
+            frameColour = scannedFrameColour,
+            legSize = scannedLegSize,
+            legHeight = scannedLegHeight,
+            legShape = scannedLegShape
         )
         if (localDupErr != null) {
             clearScannedData()
@@ -818,45 +814,70 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             mode = modeStr,
             orderNo = orderNo,
             copyName = normalizedCopy,
-            tableIndex = tableIdx
+            tableIndex = tableIdx,
+            size = scannedSize,
+            topColour = scannedTopColour,
+            frameColour = scannedFrameColour,
+            legSize = scannedLegSize,
+            legHeight = scannedLegHeight,
+            legShape = scannedLegShape
         )
 
         val newRecord = ScannedRecord(
             scannerName = _scannerName.value,
             deviceId = deviceId,
             mode = modeStr,
-            restocked = isReturn,
+            restocked = if (isReturn) restockFlag else false,
             vehicleNumber = effectiveVehicle,
-            notes = "",
+            notes = finalNote,
             orderNo = orderNo,
-            orderId = payload.orderId ?: "",
-            customer = payload.customer ?: "",
-            district = payload.district ?: "",
-            deliveryDate = payload.deliveryDate ?: "",
-            deliveryType = payload.deliveryType ?: "",
-            salesPerson = payload.salesPerson ?: "",
-            totalUnits = payload.totalUnits ?: 1,
+            orderId = payload.resolvedOrderId,
+            customer = payload.resolvedCustomer,
+            district = payload.resolvedDistrict,
+            deliveryDate = payload.resolvedDeliveryDate,
+            deliveryType = payload.resolvedDeliveryType,
+            salesPerson = payload.resolvedSalesPerson,
+            totalUnits = scannedTotalUnits,
             copy = normalizedCopy,
             tableIndex = tableIdx,
-            tableCount = payload.tableCount ?: payload.totalUnits ?: 1,
-            size = payload.size ?: "",
-            topColour = payload.topColour ?: "",
-            frameColour = payload.frameColour ?: "",
-            qty = payload.qty ?: 1,
-            legSize = payload.legSize ?: "",
-            legShape = payload.legShape ?: "",
-            legHeight = payload.legHeight ?: "",
+            tableCount = payload.resolvedTableCount,
+            size = scannedSize,
+            topColour = scannedTopColour,
+            frameColour = scannedFrameColour,
+            qty = scannedQty,
+            legSize = scannedLegSize,
+            legShape = scannedLegShape,
+            legHeight = scannedLegHeight,
             qrTimestamp = payload.ts ?: "",
             duplicateKey = duplicateKey,
             rawPayload = raw,
             syncStatus = "PENDING"
         )
 
+        if (wasManual) {
+            if (isReturn) {
+                _manualOrderInput.value = ""
+            } else {
+                _manualDispatchOrderInput.value = ""
+            }
+        }
+
         triggerFeedback(context)
         clearScannedData()
 
         viewModelScope.launch {
-            val dbDup = repository.checkLocalDuplicate(modeStr, orderNo, normalizedCopy, tableIdx)
+            val dbDup = repository.checkLocalDuplicate(
+                mode = modeStr,
+                orderNo = orderNo,
+                copyName = normalizedCopy,
+                tableIndex = tableIdx,
+                size = scannedSize,
+                topColour = scannedTopColour,
+                frameColour = scannedFrameColour,
+                legSize = scannedLegSize,
+                legHeight = scannedLegHeight,
+                legShape = scannedLegShape
+            )
             if (dbDup != null) {
                 _scanError.value = dbDup
                 _rejectTriggerCount.value += 1
@@ -870,11 +891,12 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
             val savedRecord = newRecord.copy(id = id)
 
             val syncResult = repository.syncRecord(savedRecord)
+            val sizeTag = if (scannedSize.isNotBlank()) " · $scannedSize" else ""
 
             when (syncResult) {
                 is SyncStatusResult.Success -> {
                     val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
-                    val toastTitle = if (isReturn) "#$orderNo returned" else "#$orderNo dispatched"
+                    val toastTitle = if (isReturn) "#$orderNo$sizeTag returned" else "#$orderNo$sizeTag dispatched"
                     val toastSub = when {
                         isReturn -> "$normalizedCopy · $effectiveVehicle · $slTime"
                         isGatePass -> "GATE PASS · ${effectiveVehicle.replace("(", "· ").replace(")", "")} · $slTime"
@@ -900,7 +922,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                 is SyncStatusResult.Offline -> {
                     val slTime = DispatchRepository.formatSriLankaDateTime(savedRecord.scannedAt)
                     showTopToast(
-                        title = "Saved offline · #$orderNo",
+                        title = "Saved offline · #$orderNo$sizeTag",
                         subtitle = "$normalizedCopy · $slTime (SLST)",
                         isOffline = true
                     )
@@ -1057,7 +1079,11 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 val api = SupabaseApiClient.getApiService(_supabaseUrl.value, _supabaseKey.value)
-                val recentTransports = api.getRecentTransports(limit = 100)
+                val recentLogs = try {
+                    api.getRecentDispatchReturnLogs(limit = 100)
+                } catch (_: Exception) {
+                    emptyList()
+                }
                 val recentOrders = try {
                     api.getRecentOrders(limit = 100)
                 } catch (_: Exception) {
@@ -1065,47 +1091,115 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
                 }
                 val ordersById = recentOrders.associateBy { it.id }
 
-                val todayTransports = recentTransports.filter { tr ->
-                    val loadedDate = tr.loaded_at?.take(10).orEmpty()
-                    loadedDate == todayStr || loadedDate.isEmpty()
+                val todayLogs = recentLogs.filter { log ->
+                    val createdDate = log.created_at?.take(10).orEmpty()
+                    createdDate == todayStr || createdDate.isEmpty()
                 }
 
-                todayTransports.forEach { tr ->
-                    val matchedOrder = ordersById[tr.order_id]
-                    val orderNo = matchedOrder?.order_form_number ?: tr.order_id?.take(8).orEmpty()
-                    val normalizedCopy = DispatchRepository.normalizeCopyType(tr.copy_name)
-                    val isReturn = tr.transport_status?.trim().equals(DispatchRepository.TRANSPORT_STATUS_RETURNED, ignoreCase = true)
-                    val modeStr = if (isReturn) "RETURN" else "DISPATCH"
+                if (todayLogs.isNotEmpty()) {
+                    todayLogs.forEach { log ->
+                        val matchedOrder = ordersById[log.order_id]
+                        val orderNo = log.order_form_number?.ifBlank { null }
+                            ?: matchedOrder?.order_form_number
+                            ?: log.order_id?.take(8).orEmpty()
+                        val normalizedCopy = DispatchRepository.normalizeCopyType(log.copy_type)
+                        val modeStr = if (log.operation_mode.equals("RETURN", ignoreCase = true)) "RETURN" else "DISPATCH"
+                        val parsedNotes = DispatchRepository.parseNotesKeyValues(log.notes)
+                        val tableSize = log.table_size?.ifBlank { null } ?: parsedNotes["size"].orEmpty()
+                        val topCol = log.colour?.ifBlank { null } ?: parsedNotes["topColour"].orEmpty()
+                        val frameCol = parsedNotes["frameColour"].orEmpty()
+                        val legSz = parsedNotes["legSize"].orEmpty()
+                        val legHt = parsedNotes["legHeight"].orEmpty()
+                        val legShp = parsedNotes["legShape"].orEmpty()
+                        val qtyVal = log.quantity ?: parsedNotes["qty"]?.toIntOrNull() ?: 1
 
-                    val newRecord = ScannedRecord(
-                        scannerName = _scannerName.value,
-                        deviceId = deviceId,
-                        mode = modeStr,
-                        restocked = isReturn,
-                        vehicleNumber = tr.transport_mode.orEmpty(),
-                        notes = "",
-                        orderNo = orderNo,
-                        orderId = tr.order_id.orEmpty(),
-                        customer = matchedOrder?.customer_name.orEmpty(),
-                        district = matchedOrder?.customer_district.orEmpty(),
-                        deliveryDate = matchedOrder?.delivery_date.orEmpty(),
-                        deliveryType = matchedOrder?.delivery_type.orEmpty(),
-                        salesPerson = matchedOrder?.sales_person_name.orEmpty(),
-                        totalUnits = matchedOrder?.quantity ?: 1,
-                        copy = normalizedCopy,
-                        tableIndex = 1,
-                        tableCount = matchedOrder?.quantity ?: 1,
-                        size = matchedOrder?.table_size.orEmpty(),
-                        topColour = matchedOrder?.colour.orEmpty(),
-                        frameColour = "",
-                        qty = matchedOrder?.quantity ?: 1,
-                        qrTimestamp = tr.loaded_at.orEmpty(),
-                        duplicateKey = DispatchRepository.buildDuplicateKey(modeStr, orderNo, normalizedCopy, 1),
-                        rawPayload = "",
-                        syncStatus = "SYNCED",
-                        scannedAt = System.currentTimeMillis()
-                    )
-                    repository.insertRecord(newRecord)
+                        val newRecord = ScannedRecord(
+                            scannerName = log.scanner_name?.ifBlank { _scannerName.value } ?: _scannerName.value,
+                            deviceId = log.device_id?.ifBlank { deviceId } ?: deviceId,
+                            mode = modeStr,
+                            restocked = log.restocked ?: (modeStr == "RETURN"),
+                            vehicleNumber = log.vehicle_number.orEmpty(),
+                            notes = DispatchRepository.extractUserNote(log.notes),
+                            orderNo = orderNo,
+                            orderId = log.order_id.orEmpty(),
+                            customer = log.customer_name?.ifBlank { matchedOrder?.customer_name.orEmpty() }.orEmpty(),
+                            district = log.customer_district?.ifBlank { matchedOrder?.customer_district.orEmpty() }.orEmpty(),
+                            deliveryDate = matchedOrder?.delivery_date.orEmpty(),
+                            deliveryType = matchedOrder?.delivery_type.orEmpty(),
+                            salesPerson = matchedOrder?.sales_person_name.orEmpty(),
+                            totalUnits = matchedOrder?.quantity ?: qtyVal,
+                            copy = normalizedCopy,
+                            tableIndex = 1,
+                            tableCount = matchedOrder?.quantity ?: qtyVal,
+                            size = tableSize,
+                            topColour = topCol,
+                            frameColour = frameCol,
+                            qty = qtyVal,
+                            legSize = legSz,
+                            legShape = legShp,
+                            legHeight = legHt,
+                            qrTimestamp = log.created_at.orEmpty(),
+                            duplicateKey = DispatchRepository.buildDuplicateKey(
+                                mode = modeStr,
+                                orderNo = orderNo,
+                                copyName = normalizedCopy,
+                                tableIndex = 1,
+                                size = tableSize,
+                                topColour = topCol,
+                                frameColour = frameCol,
+                                legSize = legSz,
+                                legHeight = legHt,
+                                legShape = legShp
+                            ),
+                            rawPayload = "",
+                            syncStatus = "SYNCED",
+                            scannedAt = System.currentTimeMillis()
+                        )
+                        repository.insertRecord(newRecord)
+                    }
+                } else {
+                    val recentTransports = api.getRecentTransports(limit = 100)
+                    val todayTransports = recentTransports.filter { tr ->
+                        val loadedDate = tr.loaded_at?.take(10).orEmpty()
+                        loadedDate == todayStr || loadedDate.isEmpty()
+                    }
+                    todayTransports.forEach { tr ->
+                        val matchedOrder = ordersById[tr.order_id]
+                        val orderNo = matchedOrder?.order_form_number ?: tr.order_id?.take(8).orEmpty()
+                        val normalizedCopy = DispatchRepository.normalizeCopyType(tr.copy_name)
+                        val isReturn = tr.transport_status?.trim().equals(DispatchRepository.TRANSPORT_STATUS_RETURNED, ignoreCase = true)
+                        val modeStr = if (isReturn) "RETURN" else "DISPATCH"
+
+                        val newRecord = ScannedRecord(
+                            scannerName = _scannerName.value,
+                            deviceId = deviceId,
+                            mode = modeStr,
+                            restocked = isReturn,
+                            vehicleNumber = tr.transport_mode.orEmpty(),
+                            notes = "",
+                            orderNo = orderNo,
+                            orderId = tr.order_id.orEmpty(),
+                            customer = matchedOrder?.customer_name.orEmpty(),
+                            district = matchedOrder?.customer_district.orEmpty(),
+                            deliveryDate = matchedOrder?.delivery_date.orEmpty(),
+                            deliveryType = matchedOrder?.delivery_type.orEmpty(),
+                            salesPerson = matchedOrder?.sales_person_name.orEmpty(),
+                            totalUnits = matchedOrder?.quantity ?: 1,
+                            copy = normalizedCopy,
+                            tableIndex = 1,
+                            tableCount = matchedOrder?.quantity ?: 1,
+                            size = matchedOrder?.table_size.orEmpty(),
+                            topColour = matchedOrder?.colour.orEmpty(),
+                            frameColour = "",
+                            qty = 1,
+                            qrTimestamp = tr.loaded_at.orEmpty(),
+                            duplicateKey = DispatchRepository.buildDuplicateKey(modeStr, orderNo, normalizedCopy, 1),
+                            rawPayload = "",
+                            syncStatus = "SYNCED",
+                            scannedAt = System.currentTimeMillis()
+                        )
+                        repository.insertRecord(newRecord)
+                    }
                 }
                 _lastSyncTime.value = DispatchRepository.formatSriLankaDateTime()
                 onSuccess()

@@ -690,6 +690,13 @@ fun ScannerScreen(
     val manualReturnStatus by viewModel.manualReturnStatus.collectAsStateWithLifecycle()
     val isProcessingReturn by viewModel.isProcessingReturn.collectAsStateWithLifecycle()
 
+    // Manual Confirmation & Order Note states
+    val isManualConfirmation by viewModel.isManualConfirmation.collectAsStateWithLifecycle()
+    val isFetchingManualOrder by viewModel.isFetchingManualOrder.collectAsStateWithLifecycle()
+    val manualOrderFoundInDb by viewModel.manualOrderFoundInDb.collectAsStateWithLifecycle()
+    val manualOrderTables by viewModel.manualOrderTables.collectAsStateWithLifecycle()
+    val confirmationNote by viewModel.confirmationNote.collectAsStateWithLifecycle()
+
     val selectedVehicleOption by viewModel.selectedVehicleOption.collectAsStateWithLifecycle()
     val pickMeVehicleNumber by viewModel.pickMeVehicleNumber.collectAsStateWithLifecycle()
     val customVehicleNumber by viewModel.customVehicleNumber.collectAsStateWithLifecycle()
@@ -1406,7 +1413,7 @@ fun ScannerScreen(
             )
         }
 
-        // 5-Second Draining Auto-Confirm QR Scan Sheet (States 1, 2, 3)
+        // 5-Second Draining / Manual Edit Auto-Confirm QR Scan Sheet (States 1, 2, 3)
         if (scannedPayload != null) {
             AutoConfirmScanSheet(
                 payload = scannedPayload!!,
@@ -1417,6 +1424,22 @@ fun ScannerScreen(
                 },
                 onCancel = {
                     viewModel.clearScannedData()
+                },
+                isManualConfirmation = isManualConfirmation,
+                isFetchingManualOrder = isFetchingManualOrder,
+                manualOrderFoundInDb = manualOrderFoundInDb,
+                manualOrderTables = manualOrderTables,
+                initialNote = confirmationNote,
+                initialRestocked = if (isReturnMode) manualRestocked else true,
+                onConfirmWithEdits = { editedPayload, noteText, restockFlag ->
+                    viewModel.recordDispatch(
+                        context = context,
+                        onSuccess = {},
+                        onDuplicate = {},
+                        overridePayload = editedPayload,
+                        noteText = noteText,
+                        restockOverride = if (isReturnMode) restockFlag else null
+                    )
                 }
             )
         }
@@ -1872,11 +1895,16 @@ private fun SwipeablePendingRow(
                     )
                 }
                 Spacer(modifier = Modifier.height(2.dp))
+                val pendingTableLabel = if (record.size.isNotBlank()) {
+                    "Size ${record.size} (Qty ${record.qty})"
+                } else {
+                    "Table ${record.tableIndex}/${record.tableCount.coerceAtLeast(1)}"
+                }
                 Text(
                     text = listOfNotNull(
                         record.customer.ifBlank { null },
                         record.vehicleNumber.substringBefore("(").trim().ifBlank { null },
-                        "Table ${record.tableIndex}/${record.tableCount.coerceAtLeast(1)}"
+                        pendingTableLabel
                     ).joinToString(" · "),
                     fontFamily = InterFontFamily,
                     fontSize = 13.sp,
@@ -1912,13 +1940,72 @@ fun HistoryScreen(viewModel: DispatchViewModel) {
 
     val context = LocalContext.current
     var isClearing by remember { mutableStateOf(false) }
+    var recordForNoteDialog by remember { mutableStateOf<ScannedRecord?>(null) }
+    var noteDialogText by remember { mutableStateOf("") }
 
     if (selectedRecordDetail != null) {
         RecordDetailScreen(
             record = selectedRecordDetail!!,
-            onBack = { selectedRecordDetail = null }
+            onBack = { selectedRecordDetail = null },
+            onSaveNote = { newNote ->
+                viewModel.updateRecordNote(selectedRecordDetail!!, newNote) { updated ->
+                    selectedRecordDetail = updated
+                }
+            }
         )
         return
+    }
+
+    if (recordForNoteDialog != null) {
+        val targetRec = recordForNoteDialog!!
+        AlertDialog(
+            onDismissRequest = { recordForNoteDialog = null },
+            title = {
+                Text(
+                    text = "Order #${targetRec.orderNo} Note",
+                    fontFamily = InterFontFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "${targetRec.copy} · ${targetRec.size.ifBlank { "Table ${targetRec.tableIndex}/${targetRec.tableCount.coerceAtLeast(1)}" }}",
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontSize = 12.sp,
+                        color = SecondaryLabel
+                    )
+                    OutlinedTextField(
+                        value = noteDialogText,
+                        onValueChange = { noteDialogText = it },
+                        placeholder = { Text("Enter note about this order...") },
+                        maxLines = 4,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("history_dialog_note_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.updateRecordNote(targetRec, noteDialogText)
+                        recordForNoteDialog = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DispatchIndigo),
+                    modifier = Modifier.testTag("history_dialog_save_note_button")
+                ) {
+                    Text("Save Note", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { recordForNoteDialog = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Column(
@@ -2149,7 +2236,11 @@ fun HistoryScreen(viewModel: DispatchViewModel) {
                     ) { index, record ->
                         HistoryItemCard(
                             record = record,
-                            onClick = { selectedRecordDetail = record }
+                            onClick = { selectedRecordDetail = record },
+                            onEditNoteClick = {
+                                noteDialogText = record.notes
+                                recordForNoteDialog = record
+                            }
                         )
                         if (index < history.lastIndex) {
                             HairlineDivider(startIndent = 62.dp)
@@ -2162,7 +2253,11 @@ fun HistoryScreen(viewModel: DispatchViewModel) {
 }
 
 @Composable
-fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
+fun HistoryItemCard(
+    record: ScannedRecord,
+    onClick: () -> Unit,
+    onEditNoteClick: (() -> Unit)? = null
+) {
     val formattedTime = remember(record.scannedAt) {
         DispatchRepository.formatSriLankaDateTime(record.scannedAt)
     }
@@ -2265,8 +2360,27 @@ fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
 
             Spacer(modifier = Modifier.height(3.dp))
 
+            val itemSpecLine = buildString {
+                append(record.copy.ifBlank { "GATE PASS" })
+                if (record.size.isNotBlank()) {
+                    append(" · ")
+                    append(record.size)
+                    append(" (Qty ${record.qty})")
+                } else {
+                    append(" · Table ${record.tableIndex}/${record.tableCount.coerceAtLeast(1)}")
+                }
+                val featureSummary = listOfNotNull(
+                    record.topColour.ifBlank { null },
+                    record.frameColour.ifBlank { null },
+                    record.legSize.ifBlank { null }
+                ).joinToString("/")
+                if (featureSummary.isNotBlank()) {
+                    append(" · ")
+                    append(featureSummary)
+                }
+            }
             Text(
-                text = "${record.copy.ifBlank { "GATE PASS" }} · Table ${record.tableIndex}/${record.tableCount.coerceAtLeast(1)}",
+                text = itemSpecLine,
                 fontFamily = JetBrainsMonoFontFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 12.sp,
@@ -2292,6 +2406,24 @@ fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
                 )
             }
 
+            if (record.notes.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = DispatchIndigoTint,
+                    modifier = Modifier.testTag("history_item_note_badge_${record.id}")
+                ) {
+                    Text(
+                        text = "Note: ${record.notes}",
+                        fontFamily = InterFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = DispatchIndigoText,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
             if (!record.errorMessage.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
@@ -2308,7 +2440,7 @@ fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // Right Column: Time + Chevron + SyncStatusBadge
+        // Right Column: Time + Chevron + SyncStatusBadge + Add/Edit Note Action
         Column(horizontalAlignment = Alignment.End) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -2326,6 +2458,35 @@ fun HistoryItemCard(record: ScannedRecord, onClick: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(6.dp))
             SyncStatusBadge(status = record.syncStatus)
+            if (onEditNoteClick != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    onClick = onEditNoteClick,
+                    shape = RoundedCornerShape(999.dp),
+                    color = TertiaryFill,
+                    modifier = Modifier.testTag("history_note_button_${record.id}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EditNote,
+                            contentDescription = "Add or Edit Note",
+                            tint = DispatchIndigo,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (record.notes.isBlank()) "+ Note" else "Edit note",
+                            fontFamily = InterFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = DispatchIndigo
+                        )
+                    }
+                }
+            }
         }
     }
 }

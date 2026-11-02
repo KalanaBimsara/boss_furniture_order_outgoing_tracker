@@ -21,16 +21,32 @@ data class QrPayload(
     val copy_type: String? = null,
     val copyType: String? = null,
     val totalUnits: Int? = null,
+    val total_units: Int? = null,
     val size: String? = null,
     val table_size: String? = null,
+    val tableSize: String? = null,
     val topColour: String? = null,
+    val top_colour: String? = null,
+    val topColor: String? = null,
+    val top_color: String? = null,
     val colour: String? = null,
+    val color: String? = null,
     val frameColour: String? = null,
+    val frame_colour: String? = null,
+    val frameColor: String? = null,
+    val frame_color: String? = null,
+    val legColour: String? = null,
+    val leg_colour: String? = null,
+    val legColor: String? = null,
+    val leg_color: String? = null,
     val qty: Int? = null,
     val quantity: Int? = null,
     val legSize: String? = null,
+    val leg_size: String? = null,
     val legShape: String? = null,
+    val leg_shape: String? = null,
     val legHeight: String? = null,
+    val leg_height: String? = null,
     val v: Int? = 1,
     val orderId: String? = null,
     val order_id: String? = null,
@@ -70,16 +86,28 @@ data class QrPayload(
         get() = (salesPerson ?: sales_person_name)?.trim().orEmpty()
 
     val resolvedSize: String
-        get() = (size ?: table_size)?.trim().orEmpty()
+        get() = (size ?: table_size ?: tableSize)?.trim().orEmpty()
 
     val resolvedTopColour: String
-        get() = (topColour ?: colour)?.trim().orEmpty()
+        get() = (topColour ?: top_colour ?: topColor ?: top_color ?: colour ?: color)?.trim().orEmpty()
+
+    val resolvedFrameColour: String
+        get() = (frameColour ?: frame_colour ?: frameColor ?: frame_color ?: legColour ?: leg_colour ?: legColor ?: leg_color)?.trim().orEmpty()
+
+    val resolvedLegSize: String
+        get() = (legSize ?: leg_size)?.trim().orEmpty()
+
+    val resolvedLegShape: String
+        get() = (legShape ?: leg_shape)?.trim().orEmpty()
+
+    val resolvedLegHeight: String
+        get() = (legHeight ?: leg_height)?.trim().orEmpty()
 
     val resolvedQty: Int
         get() = qty ?: quantity ?: 1
 
     val resolvedTotalUnits: Int
-        get() = totalUnits ?: quantity ?: qty ?: 1
+        get() = totalUnits ?: total_units ?: quantity ?: qty ?: 1
 
     val resolvedTableIndex: Int
         get() = tableIndex ?: table_index ?: 1
@@ -101,7 +129,11 @@ data class QrPayload(
             totalUnits = resolvedTotalUnits,
             size = resolvedSize,
             topColour = resolvedTopColour,
+            frameColour = resolvedFrameColour,
             qty = resolvedQty,
+            legSize = resolvedLegSize,
+            legShape = resolvedLegShape,
+            legHeight = resolvedLegHeight,
             orderId = resolvedOrderId,
             tableIndex = resolvedTableIndex,
             tableCount = resolvedTableCount,

@@ -65,6 +65,24 @@ data class SupabaseOrder(
     @field:Json(name = "created_at") val created_at: String? = null
 )
 
+@JsonClass(generateAdapter = true)
+data class SupabaseOrderTable(
+    @field:Json(name = "id") val id: String? = null,
+    @field:Json(name = "order_id") val order_id: String? = null,
+    @field:Json(name = "table_size") val table_size: String? = null,
+    @field:Json(name = "top_colour") val top_colour: String? = null,
+    @field:Json(name = "frame_colour") val frame_colour: String? = null,
+    @field:Json(name = "leg_size") val leg_size: String? = null,
+    @field:Json(name = "leg_shape") val leg_shape: String? = null,
+    @field:Json(name = "leg_height") val leg_height: String? = null,
+    @field:Json(name = "quantity") val quantity: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class DispatchReturnLogNotesPatchBody(
+    @field:Json(name = "notes") val notes: String
+)
+
 /**
  * Matches `public.transport` table in Supabase:
  * id, order_id, transport_mode, loaded_at, loaded_by, copy_name, transport_status
@@ -136,6 +154,7 @@ data class DispatchReturnLogResponse(
     @field:Json(name = "table_size") val table_size: String? = null,
     @field:Json(name = "colour") val colour: String? = null,
     @field:Json(name = "quantity") val quantity: Int? = null,
+    @field:Json(name = "notes") val notes: String? = null,
     @field:Json(name = "created_at") val created_at: String? = null
 )
 
@@ -227,10 +246,28 @@ interface SupabaseApi {
         @Query("select") select: String = "*"
     ): List<DispatchReturnLogResponse>
 
+    @GET("rest/v1/dispatch_return_logs")
+    suspend fun getDispatchReturnLogsByOrderId(
+        @Query("order_id") orderIdFilter: String,
+        @Query("select") select: String = "*"
+    ): List<DispatchReturnLogResponse>
+
     @POST("rest/v1/dispatch_return_logs")
     suspend fun insertDispatchReturnLog(
         @Body body: DispatchReturnLogInsertBody
     ): retrofit2.Response<Unit>
+
+    @GET("rest/v1/order_tables")
+    suspend fun getOrderTablesByOrderId(
+        @Query("order_id") orderIdFilter: String,
+        @Query("select") select: String = "*"
+    ): List<SupabaseOrderTable> = emptyList()
+
+    @PATCH("rest/v1/dispatch_return_logs")
+    suspend fun updateDispatchReturnLogNotesById(
+        @Query("id") idFilter: String,
+        @Body body: DispatchReturnLogNotesPatchBody
+    ): retrofit2.Response<List<DispatchReturnLogResponse>> = retrofit2.Response.success(emptyList())
 }
 
 object SupabaseApiClient {
