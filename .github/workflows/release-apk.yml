@@ -43,10 +43,20 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
           # Install exact Gradle 9.3.1 required by AGP 9.1.1
-          curl -fsSL https://services.gradle.org/distributions/gradle-9.3.1-bin.zip -o /tmp/gradle.zip
+          curl -fsSL --retry 5 --retry-delay 3 https://services.gradle.org/distributions/gradle-9.3.1-bin.zip -o /tmp/gradle.zip
           sudo unzip -q /tmp/gradle.zip -d /opt/gradle
           echo "/opt/gradle/gradle-9.3.1/bin" >> "$GITHUB_PATH"
           /opt/gradle/gradle-9.3.1/bin/gradle --version
+
+      - name: Cache Gradle Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Prepare Signing Keystores & Environment
         env:
@@ -101,7 +111,22 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
         run: |
-          gradle :app:testDebugUnitTest -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
+          for attempt in 1 2 3; do
+            echo "Running unit tests (attempt $attempt)..."
+            if gradle :app:testDebugUnitTest \
+              -Pkotlin.compiler.execution.strategy=daemon \
+              -Dorg.gradle.internal.http.connectionTimeout=120000 \
+              -Dorg.gradle.internal.http.socketTimeout=120000 \
+              -Dorg.gradle.internal.repository.max.tentatives=5 \
+              --no-configuration-cache; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Transient error detected, retrying in 5 seconds..."
+            sleep 5
+          done
 
       - name: Build Debug & Release APKs
         env:
@@ -110,8 +135,22 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'bossfurniture123' }}
           JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true"
         run: |
-          gradle assembleDebug -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
-          gradle assembleRelease -Pkotlin.compiler.execution.strategy=daemon --no-configuration-cache
+          for attempt in 1 2 3; do
+            echo "Building Debug & Release APKs (attempt $attempt)..."
+            if gradle assembleDebug assembleRelease \
+              -Pkotlin.compiler.execution.strategy=daemon \
+              -Dorg.gradle.internal.http.connectionTimeout=120000 \
+              -Dorg.gradle.internal.http.socketTimeout=120000 \
+              -Dorg.gradle.internal.repository.max.tentatives=5 \
+              --no-configuration-cache; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Transient error detected, retrying in 5 seconds..."
+            sleep 5
+          done
 
       - name: Prepare Release APK Files
         run: |
