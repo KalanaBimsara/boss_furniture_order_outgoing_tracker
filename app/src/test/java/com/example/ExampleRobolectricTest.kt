@@ -77,8 +77,8 @@ class ExampleRobolectricTest {
         assertEquals("DAC-4912 (Rathnayake)", viewModel.getEffectiveVehicleNumber())
 
         // Verify Supabase preconfigured credentials
-        assertEquals("https://baxnczbtheknzpoerpfn.supabase.co", viewModel.supabaseUrl.value)
-        assertEquals("sb_publishable_4H_QqrQ4jWxfZ39KVoaWaQ_NX8U8gIs", viewModel.supabaseKey.value)
+        assertEquals("https://hlemlubraovotrsdkgka.supabase.co", viewModel.supabaseUrl.value)
+        assertEquals("sb_publishable_pYesGxabujz8z3PWiJjD9A_myGuSLGA", viewModel.supabaseKey.value)
     }
 
     @Test

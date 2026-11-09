@@ -423,13 +423,21 @@ object SupabaseApiClient {
     fun getApiService(url: String = "", key: String = ""): SupabaseApi {
         val rawUrl = url.trim().ifEmpty {
             val buildUrl = BuildConfig.SUPABASE_URL
-            if (buildUrl.isNotBlank() && !buildUrl.contains("your-project")) buildUrl else PRECONFIGURED_URL
+            if (
+                buildUrl.isNotBlank() &&
+                !buildUrl.contains("your-project") &&
+                !buildUrl.contains("baxnczbtheknzpoerpfn.supabase.co")
+            ) buildUrl else PRECONFIGURED_URL
         }
         val effectiveUrl = (if (rawUrl.endsWith("/")) rawUrl else "$rawUrl/")
 
         val effectiveKey = key.trim().ifEmpty {
             val buildKey = BuildConfig.SUPABASE_KEY
-            if (buildKey.isNotBlank() && !buildKey.contains("your-supabase")) buildKey else PRECONFIGURED_KEY
+            if (
+                buildKey.isNotBlank() &&
+                buildKey.startsWith("sb_publishable_") &&
+                buildKey != "sb_publishable_4H_QqrQ4jWxfZ39KVoaWaQ_NX8U8gIs"
+            ) buildKey else PRECONFIGURED_KEY
         }
 
         if (cachedService != null && cachedUrl == effectiveUrl && cachedKey == effectiveKey) {

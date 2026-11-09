@@ -762,9 +762,9 @@ open class DispatchRepository(
                 record.copy(orderNo = cleanOrderNo, copy = normalizedCopy, notes = record.notes.trim())
             }
 
-            // 2. Resolve driver UUID from selected vehicle or `public.profiles`
-            var deliveryPersonId: String? = resolveKnownDriverUuid(effectiveVehicle)
-            if (deliveryPersonId == null && !effectiveVehicle.startsWith("Pick Me", ignoreCase = true)) {
+            // 2. Resolve driver UUID from `public.profiles` (preferring live profile lookup for active DB, falling back to known UUID)
+            var deliveryPersonId: String? = null
+            if (!effectiveVehicle.startsWith("Pick Me", ignoreCase = true)) {
                 val candidateName = if (effectiveVehicle.contains("(") && effectiveVehicle.contains(")")) {
                     effectiveVehicle.substringAfter("(").substringBefore(")").trim()
                 } else {
@@ -778,6 +778,9 @@ open class DispatchRepository(
                         }
                     } catch (_: Exception) {}
                 }
+            }
+            if (deliveryPersonId.isNullOrBlank()) {
+                deliveryPersonId = resolveKnownDriverUuid(effectiveVehicle)
             }
 
             val resolvedOrderId: String? = matchedOrder?.id

@@ -10,8 +10,11 @@ class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
 
     companion object {
-        const val DEFAULT_SUPABASE_URL = "https://baxnczbtheknzpoerpfn.supabase.co"
-        const val DEFAULT_SUPABASE_KEY = "sb_publishable_4H_QqrQ4jWxfZ39KVoaWaQ_NX8U8gIs"
+        const val DEFAULT_SUPABASE_PROJECT_ID = "hlemlubraovotrsdkgka"
+        const val DEFAULT_SUPABASE_URL = "https://hlemlubraovotrsdkgka.supabase.co"
+        const val DEFAULT_SUPABASE_KEY = "sb_publishable_pYesGxabujz8z3PWiJjD9A_myGuSLGA"
+        private const val LEGACY_SUPABASE_URL = "baxnczbtheknzpoerpfn.supabase.co"
+        private const val LEGACY_SUPABASE_KEY = "sb_publishable_4H_QqrQ4jWxfZ39KVoaWaQ_NX8U8gIs"
     }
 
     fun getScannerName(): String {
@@ -32,11 +35,20 @@ class SettingsRepository(context: Context) {
 
     fun getSupabaseUrl(): String {
         val saved = prefs.getString("supabase_url", "") ?: ""
-        return if (saved.isNotBlank() && !saved.contains("your-project.supabase.co") && !saved.contains("placeholder.supabase.co")) {
+        return if (
+            saved.isNotBlank() &&
+            !saved.contains("your-project.supabase.co") &&
+            !saved.contains("placeholder.supabase.co") &&
+            !saved.contains(LEGACY_SUPABASE_URL)
+        ) {
             saved
         } else {
             val buildCfg = BuildConfig.SUPABASE_URL
-            if (buildCfg.isNotBlank() && !buildCfg.contains("your-project.supabase.co")) buildCfg else DEFAULT_SUPABASE_URL
+            if (
+                buildCfg.isNotBlank() &&
+                !buildCfg.contains("your-project.supabase.co") &&
+                !buildCfg.contains(LEGACY_SUPABASE_URL)
+            ) buildCfg else DEFAULT_SUPABASE_URL
         }
     }
 
@@ -46,11 +58,19 @@ class SettingsRepository(context: Context) {
 
     fun getSupabaseKey(): String {
         val saved = prefs.getString("supabase_key", "") ?: ""
-        return if (saved.isNotBlank() && !saved.contains("your-supabase")) {
+        return if (
+            saved.isNotBlank() &&
+            !saved.contains("your-supabase") &&
+            saved != LEGACY_SUPABASE_KEY
+        ) {
             saved
         } else {
             val buildCfg = BuildConfig.SUPABASE_KEY
-            if (buildCfg.isNotBlank() && buildCfg.startsWith("sb_publishable_")) buildCfg else DEFAULT_SUPABASE_KEY
+            if (
+                buildCfg.isNotBlank() &&
+                buildCfg.startsWith("sb_publishable_") &&
+                buildCfg != LEGACY_SUPABASE_KEY
+            ) buildCfg else DEFAULT_SUPABASE_KEY
         }
     }
 
