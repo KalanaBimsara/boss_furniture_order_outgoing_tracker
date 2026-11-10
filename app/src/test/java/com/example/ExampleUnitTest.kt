@@ -343,7 +343,7 @@ class ExampleUnitTest {
             scannerName = "Station 01",
             deviceId = "dev-1",
             mode = "DISPATCH",
-            vehicleNumber = "DAE-4217 (Lasantha)",
+            vehicleNumber = "DAE-4717 (Lasantha)",
             orderNo = "3520",
             copy = "ACCOUNT COPY",
             duplicateKey = DispatchRepository.buildDuplicateKey("DISPATCH", "3520", "ACCOUNT COPY"),
@@ -365,7 +365,7 @@ class ExampleUnitTest {
             scannerName = "Station 01",
             deviceId = "dev-1",
             mode = "DISPATCH",
-            vehicleNumber = "DAE-4217 (Lasantha)",
+            vehicleNumber = "DAE-4717 (Lasantha)",
             orderNo = "3520",
             copy = "GATE PASS",
             duplicateKey = DispatchRepository.buildDuplicateKey("DISPATCH", "3520", "GATE PASS"),
@@ -376,7 +376,7 @@ class ExampleUnitTest {
         assertTrue(res2 is SyncStatusResult.Success)
         assertEquals("assigned", fakeApi.orders[orderUuid]!!.status)
         assertEquals("assigned", fakeApi.orders[orderUuid]!!.delivery_status)
-        assertEquals(DispatchRepository.DRIVER_UUID_LASANTHA, fakeApi.orders[orderUuid]!!.delivery_person_id)
+        assertEquals("149a7d44-326a-48fe-b970-8ac196352779", fakeApi.orders[orderUuid]!!.delivery_person_id)
         assertEquals(2, fakeApi.transports.size)
         assertEquals("GATE PASS", fakeApi.transports[1].copy_name)
     }
@@ -484,7 +484,7 @@ class ExampleUnitTest {
             scannerName = "Kalana",
             deviceId = "346273",
             mode = "DISPATCH",
-            vehicleNumber = "DAE-4217 (Lasantha)",
+            vehicleNumber = "DAE-4717 (Lasantha)",
             orderNo = normalized.orderNo.orEmpty(),
             customer = normalized.customer.orEmpty(),
             district = normalized.district.orEmpty(),
@@ -705,44 +705,10 @@ class ExampleUnitTest {
             effectiveKey = SettingsRepository.DEFAULT_SUPABASE_KEY,
             forceRefresh = true
         )
-        // When network is available in test environment, verify JWT structure and ensure Order 3535 log has table_size=30x60 and quantity=1
+        // When network is available in test environment, verify JWT structure
         if (token != null) {
             assertTrue("Expected a valid 3-part JWT access token", token.startsWith("eyJ") && token.count { it == '.' } == 2)
             assertFalse("Token must not be the raw publishable key", token.startsWith("sb_publishable_"))
-
-            val client = okhttp3.OkHttpClient()
-            val url = SettingsRepository.DEFAULT_SUPABASE_URL
-            val key = SettingsRepository.DEFAULT_SUPABASE_KEY
-            val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
-
-            val featureNotes = DispatchRepository.buildTableFeatureNotes(
-                ScannedRecord(
-                    scannerName = "Kalana",
-                    deviceId = "346273",
-                    mode = "DISPATCH",
-                    vehicleNumber = "DAE-4217 (Lasantha)",
-                    orderNo = "3535",
-                    copy = "GATE PASS",
-                    size = "30x60",
-                    topColour = "teak",
-                    frameColour = "black",
-                    legSize = "1.5x1.5",
-                    legHeight = "30",
-                    legShape = "O Shape",
-                    qty = 1,
-                    duplicateKey = "",
-                    rawPayload = ""
-                )
-            )
-            val patchJson = """{"table_size":"30x60","quantity":1,"colour":"teak","notes":"$featureNotes"}"""
-            val patchReq = okhttp3.Request.Builder()
-                .url("$url/rest/v1/dispatch_return_logs?id=eq.6dfd76a6-b23e-4882-b023-07378738fdb6")
-                .patch(okhttp3.RequestBody.create(mediaType, patchJson))
-                .addHeader("apikey", key)
-                .addHeader("Authorization", "Bearer $token")
-                .addHeader("Prefer", "return=representation")
-                .build()
-            client.newCall(patchReq).execute().close()
         }
     }
 

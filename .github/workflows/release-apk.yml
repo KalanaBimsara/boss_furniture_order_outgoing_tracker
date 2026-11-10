@@ -180,7 +180,7 @@ jobs:
 
           ### Highlights
           - Dispatch & Return modes with maximized live CameraX + ML Kit QR scanning
-          - Vehicle & Driver assignment (DAC-4912 Rathnayake, DAE-4217 Lasantha, Pick Me, and Custom Vehicles)
+          - Vehicle & Driver assignment (DAC-4912 Rathnayake, DAE-4717 Lasantha, Pick Me, and Custom Vehicles)
           - Strict GATE PASS driver assignment rule & 4-copy (GATE PASS, ACCOUNT COPY, TRANSPORT COPY, PRODUCTION COPY) tracking
           - Local (Room SQLite) + Cloud (Supabase) duplicate prevention
           - Offline-first queue with automatic background sync

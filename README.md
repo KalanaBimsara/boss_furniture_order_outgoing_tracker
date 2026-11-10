@@ -30,7 +30,7 @@ An industrial-grade, offline-first Android application built with **Kotlin** and
 ### 4. Vehicle & Driver Assignment
 Available in both **Dispatch** and **Return** modes via the Vehicle Picker sheet:
 - **`DAC-4912 (Rathnayake)`**: Company truck mapped to driver profile in Supabase (`public.profiles`).
-- **`DAE-4217 (Lasantha)`**: Company truck mapped to driver profile in Supabase (`public.profiles`).
+- **`DAE-4717 (Lasantha)`**: Company truck mapped to driver profile in Supabase (`public.profiles`).
 - **`Pick Me`**: Third-party courier option with a dedicated **Plate Number** input field (e.g., `CAA-8910`).
 - **Custom Vehicles (`+ Add custom vehicle`)**: Add and persist custom fleet vehicles with vehicle number and optional driver name.
 
@@ -79,7 +79,7 @@ Boss Furniture prints 4 physical copies per order (`GATE PASS`, `ACCOUNT COPY`, 
 The app communicates with three tables in the `public` schema via the Supabase PostgREST API:
 1. **`public.orders`** — Looks up order UUIDs by `order_form_number` and updates driver assignment (`delivery_person_id` / `delivery_type`, `status`, `delivery_status`, `updated_at`) strictly when a `GATE PASS` is dispatched or returned.
 2. **`public.transport`** — Inserts a transport audit log row for every valid scan (`order_id`, `vehicle_number`, `driver_id`, `loaded_at`, `copy_name`, `transport_status`) and enforces duplicate prevention across stations.
-3. **`public.profiles`** — Links company vehicle drivers (`DAC-4912 Rathnayake` and `DAE-4217 Lasantha`) to their respective Supabase profile UUIDs.
+3. **`public.profiles`** — Links company vehicle drivers (`DAC-4912 Rathnayake` and `DAE-4717 Lasantha`) to their respective Supabase profile UUIDs.
 
 ---
 

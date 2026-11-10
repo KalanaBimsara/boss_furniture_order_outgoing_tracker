@@ -83,11 +83,23 @@ class SettingsRepository(context: Context) {
     }
 
     fun getSelectedVehicleOption(): String {
-        return prefs.getString("selected_vehicle_option", "DAC-4912 (Rathnayake)") ?: "DAC-4912 (Rathnayake)"
+        val raw = prefs.getString("selected_vehicle_option", "DAC-4912 (Rathnayake)") ?: "DAC-4912 (Rathnayake)"
+        return if (raw.contains("DAE-4217", ignoreCase = true) || raw.contains("DAE 4217", ignoreCase = true)) {
+            val migrated = "DAE-4717 (Lasantha)"
+            prefs.edit().putString("selected_vehicle_option", migrated).apply()
+            migrated
+        } else {
+            raw
+        }
     }
 
     fun saveSelectedVehicleOption(option: String) {
-        prefs.edit().putString("selected_vehicle_option", option.trim()).apply()
+        val normalized = if (option.contains("DAE-4217", ignoreCase = true) || option.contains("DAE 4217", ignoreCase = true)) {
+            "DAE-4717 (Lasantha)"
+        } else {
+            option.trim()
+        }
+        prefs.edit().putString("selected_vehicle_option", normalized).apply()
     }
 
     fun getPickMeVehicleNumber(): String {

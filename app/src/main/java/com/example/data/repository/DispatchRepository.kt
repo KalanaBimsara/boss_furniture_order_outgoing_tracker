@@ -27,8 +27,8 @@ open class DispatchRepository(
     private val apiOverride: SupabaseApi? = null
 ) {
     companion object {
-        const val DRIVER_UUID_RATHNAYAKE = "de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56"
-        const val DRIVER_UUID_LASANTHA = "0c940655-4963-4036-ae66-4a889f9d368f"
+        const val DRIVER_UUID_RATHNAYAKE = "574e0364-858b-43e8-bf5f-5f09fc7e30cf"
+        const val DRIVER_UUID_LASANTHA = "149a7d44-326a-48fe-b970-8ac196352779"
 
         const val COPY_ACCOUNT = "ACCOUNT COPY"
         const val COPY_GATE_PASS = "GATE PASS"
@@ -332,8 +332,12 @@ open class DispatchRepository(
             val normalized = vehicleOption.trim()
             return when {
                 normalized.contains("DAC-4912", ignoreCase = true) ||
+                    normalized.contains("DAC 4912", ignoreCase = true) ||
                     normalized.contains("Rathnayake", ignoreCase = true) -> DRIVER_UUID_RATHNAYAKE
-                normalized.contains("DAE-4217", ignoreCase = true) ||
+                normalized.contains("DAE-4717", ignoreCase = true) ||
+                    normalized.contains("DAE 4717", ignoreCase = true) ||
+                    normalized.contains("DAE-4217", ignoreCase = true) ||
+                    normalized.contains("DAE 4217", ignoreCase = true) ||
                     normalized.contains("Lasantha", ignoreCase = true) -> DRIVER_UUID_LASANTHA
                 else -> null
             }
@@ -617,7 +621,8 @@ open class DispatchRepository(
         resolvedOrderId: String,
         cleanOrderNo: String,
         deliveryPersonId: String?,
-        isoTime: String
+        isoTime: String,
+        driverNameHint: String? = null
     ): String? {
         val patchBody = OrderPatchBody(
             delivery_person_id = deliveryPersonId,
@@ -627,6 +632,30 @@ open class DispatchRepository(
         )
 
         var patchResponse = api.updateOrderStatusById("eq.$resolvedOrderId", patchBody)
+        if (!patchResponse.isSuccessful && patchResponse.code() == 409 && deliveryPersonId != null) {
+            // Foreign key constraint on delivery_person_id: try resolving driver UUID from public.profiles by name,
+            // or fall back to marking the order assigned without delivery_person_id so sync never fails with 409.
+            var fallbackDriverId: String? = null
+            if (!driverNameHint.isNullOrBlank()) {
+                try {
+                    val profiles = api.getProfileByName("ilike.*${driverNameHint.trim()}*")
+                    if (profiles.isNotEmpty() && profiles[0].id != deliveryPersonId) {
+                        fallbackDriverId = profiles[0].id
+                    }
+                } catch (_: Exception) {}
+            }
+            val retryBody = patchBody.copy(delivery_person_id = fallbackDriverId)
+            val retryResp = api.updateOrderStatusById("eq.$resolvedOrderId", retryBody)
+            if (retryResp.isSuccessful) {
+                patchResponse = retryResp
+            } else if (fallbackDriverId != null) {
+                val nullDriverResp = api.updateOrderStatusById("eq.$resolvedOrderId", patchBody.copy(delivery_person_id = null))
+                if (nullDriverResp.isSuccessful) {
+                    patchResponse = nullDriverResp
+                }
+            }
+        }
+
         if (!patchResponse.isSuccessful || patchResponse.body().isNullOrEmpty()) {
             val fallbackResponse = api.updateOrderStatus("eq.$cleanOrderNo", patchBody)
             if (fallbackResponse.isSuccessful && !fallbackResponse.body().isNullOrEmpty()) {
@@ -699,8 +728,16 @@ open class DispatchRepository(
                 }
             }
 
-            val effectiveVehicle = record.vehicleNumber.trim().ifBlank {
+            val rawEffectiveVehicle = record.vehicleNumber.trim().ifBlank {
                 settingsRepo?.getSelectedVehicleOption() ?: "DAC-4912 (Rathnayake)"
+            }
+            val effectiveVehicle = if (
+                rawEffectiveVehicle.contains("DAE-4217", ignoreCase = true) ||
+                rawEffectiveVehicle.contains("DAE 4217", ignoreCase = true)
+            ) {
+                "DAE-4717 (Lasantha)"
+            } else {
+                rawEffectiveVehicle
             }
             val normalizedCopy = normalizeCopyType(record.copy)
             val isManualOrderOnly = record.rawPayload.startsWith("MANUAL_") && record.size.isBlank()
@@ -725,6 +762,7 @@ open class DispatchRepository(
                 record.copy(
                     orderNo = resolvedOrderNum,
                     copy = normalizedCopy,
+                    vehicleNumber = effectiveVehicle,
                     orderId = matchedOrder.id ?: record.orderId,
                     customer = record.customer.takeIf {
                         it.isNotBlank() &&
@@ -759,28 +797,26 @@ open class DispatchRepository(
                     notes = record.notes.trim()
                 )
             } else {
-                record.copy(orderNo = cleanOrderNo, copy = normalizedCopy, notes = record.notes.trim())
+                record.copy(orderNo = cleanOrderNo, copy = normalizedCopy, vehicleNumber = effectiveVehicle, notes = record.notes.trim())
             }
 
-            // 2. Resolve driver UUID from `public.profiles` (preferring live profile lookup for active DB, falling back to known UUID)
-            var deliveryPersonId: String? = null
-            if (!effectiveVehicle.startsWith("Pick Me", ignoreCase = true)) {
-                val candidateName = if (effectiveVehicle.contains("(") && effectiveVehicle.contains(")")) {
-                    effectiveVehicle.substringAfter("(").substringBefore(")").trim()
-                } else {
-                    effectiveVehicle.trim()
-                }
-                if (candidateName.isNotEmpty()) {
+            // 2. Resolve driver UUID from known company vehicles first (`574e0364-...` for DAC-4912 Rathnayake,
+            //    `149a7d44-...` for DAE-4717 Lasantha), falling back to `public.profiles` for custom drivers
+            val candidateDriverName = if (effectiveVehicle.contains("(") && effectiveVehicle.contains(")")) {
+                effectiveVehicle.substringAfter("(").substringBefore(")").trim()
+            } else {
+                effectiveVehicle.trim()
+            }
+            var deliveryPersonId: String? = resolveKnownDriverUuid(effectiveVehicle)
+            if (deliveryPersonId == null && !effectiveVehicle.startsWith("Pick Me", ignoreCase = true)) {
+                if (candidateDriverName.isNotEmpty()) {
                     try {
-                        val profiles = api.getProfileByName("eq.$candidateName")
+                        val profiles = api.getProfileByName("eq.$candidateDriverName")
                         if (profiles.isNotEmpty()) {
                             deliveryPersonId = profiles[0].id
                         }
                     } catch (_: Exception) {}
                 }
-            }
-            if (deliveryPersonId.isNullOrBlank()) {
-                deliveryPersonId = resolveKnownDriverUuid(effectiveVehicle)
             }
 
             val resolvedOrderId: String? = matchedOrder?.id
@@ -867,7 +903,8 @@ open class DispatchRepository(
                             resolvedOrderId = resolvedOrderId,
                             cleanOrderNo = enrichedRecord.orderNo,
                             deliveryPersonId = deliveryPersonId,
-                            isoTime = isoTime
+                            isoTime = isoTime,
+                            driverNameHint = candidateDriverName
                         )
                         if (patchErr != null) {
                             enrichedRecord.syncStatus = "FAILED"
@@ -912,7 +949,8 @@ open class DispatchRepository(
                         resolvedOrderId = resolvedOrderId,
                         cleanOrderNo = enrichedRecord.orderNo,
                         deliveryPersonId = deliveryPersonId,
-                        isoTime = isoTime
+                        isoTime = isoTime,
+                        driverNameHint = candidateDriverName
                     )
                     if (patchErr != null) {
                         enrichedRecord.syncStatus = "FAILED"
@@ -924,16 +962,23 @@ open class DispatchRepository(
 
                 // 4b. Record or update `copy_name` and `transport_status = "dispatched"` in `public.transport`
                 if (matchingTransport != null && !matchingTransport.id.isNullOrBlank()) {
-                    val updateResp = api.updateTransportById(
-                        idFilter = "eq.${matchingTransport.id}",
-                        body = TransportPatchBody(
-                            transport_mode = effectiveVehicle,
-                            loaded_at = isoTime,
-                            loaded_by = deliveryPersonId,
-                            copy_name = normalizedCopy,
-                            transport_status = TRANSPORT_STATUS_DISPATCHED
-                        )
+                    val patchBody = TransportPatchBody(
+                        transport_mode = effectiveVehicle,
+                        loaded_at = isoTime,
+                        loaded_by = deliveryPersonId,
+                        copy_name = normalizedCopy,
+                        transport_status = TRANSPORT_STATUS_DISPATCHED
                     )
+                    var updateResp = api.updateTransportById(
+                        idFilter = "eq.${matchingTransport.id}",
+                        body = patchBody
+                    )
+                    if (!updateResp.isSuccessful && updateResp.code() == 409 && deliveryPersonId != null) {
+                        updateResp = api.updateTransportById(
+                            idFilter = "eq.${matchingTransport.id}",
+                            body = patchBody.copy(loaded_by = null)
+                        )
+                    }
                     if (!updateResp.isSuccessful) {
                         val err = "Supabase Transport HTTP ${updateResp.code()}: ${updateResp.message()}"
                         enrichedRecord.syncStatus = "FAILED"
@@ -942,16 +987,18 @@ open class DispatchRepository(
                         return@withContext SyncStatusResult.Failed(err)
                     }
                 } else {
-                    val insertResp = api.insertTransport(
-                        TransportInsertBody(
-                            order_id = resolvedOrderId,
-                            transport_mode = effectiveVehicle,
-                            loaded_at = isoTime,
-                            loaded_by = deliveryPersonId,
-                            copy_name = normalizedCopy,
-                            transport_status = TRANSPORT_STATUS_DISPATCHED
-                        )
+                    val insertBody = TransportInsertBody(
+                        order_id = resolvedOrderId,
+                        transport_mode = effectiveVehicle,
+                        loaded_at = isoTime,
+                        loaded_by = deliveryPersonId,
+                        copy_name = normalizedCopy,
+                        transport_status = TRANSPORT_STATUS_DISPATCHED
                     )
+                    var insertResp = api.insertTransport(insertBody)
+                    if (!insertResp.isSuccessful && insertResp.code() == 409 && deliveryPersonId != null) {
+                        insertResp = api.insertTransport(insertBody.copy(loaded_by = null))
+                    }
                     if (!insertResp.isSuccessful) {
                         val err = "Supabase Transport HTTP ${insertResp.code()}: ${insertResp.message()}"
                         enrichedRecord.syncStatus = "FAILED"

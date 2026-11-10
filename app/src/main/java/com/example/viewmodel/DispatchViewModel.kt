@@ -88,7 +88,8 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         const val VEHICLE_DAC_4912 = "DAC-4912 (Rathnayake)"
-        const val VEHICLE_DAE_4217 = "DAE-4217 (Lasantha)"
+        const val VEHICLE_DAE_4717 = "DAE-4717 (Lasantha)"
+        const val VEHICLE_DAE_4217 = VEHICLE_DAE_4717
         const val VEHICLE_PICK_ME = "Pick Me"
         const val VEHICLE_CUSTOM_OPTION = "Custom Vehicle"
 
@@ -97,7 +98,7 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
 
         val DEFAULT_VEHICLES = listOf(
             VEHICLE_DAC_4912,
-            VEHICLE_DAE_4217,
+            VEHICLE_DAE_4717,
             VEHICLE_PICK_ME
         )
     }
@@ -297,8 +298,13 @@ class DispatchViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setSelectedVehicleOption(option: String) {
-        _selectedVehicleOption.value = option
-        settingsRepo.saveSelectedVehicleOption(option)
+        val normalized = if (option.contains("DAE-4217", ignoreCase = true) || option.contains("DAE 4217", ignoreCase = true)) {
+            VEHICLE_DAE_4717
+        } else {
+            option
+        }
+        _selectedVehicleOption.value = normalized
+        settingsRepo.saveSelectedVehicleOption(normalized)
     }
 
     fun setPickMeVehicleNumber(number: String) {

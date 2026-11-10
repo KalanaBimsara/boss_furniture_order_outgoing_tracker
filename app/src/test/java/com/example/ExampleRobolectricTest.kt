@@ -31,13 +31,13 @@ class ExampleRobolectricTest {
 
         val options = viewModel.getAvailableVehicleOptions()
         assertTrue(options.contains("DAC-4912 (Rathnayake)"))
-        assertTrue(options.contains("DAE-4217 (Lasantha)"))
+        assertTrue(options.contains("DAE-4717 (Lasantha)"))
         assertTrue(options.contains("Pick Me"))
         assertTrue(options.contains("Custom Vehicle"))
 
-        // Select DAE-4217 (Lasantha)
-        viewModel.setSelectedVehicleOption("DAE-4217 (Lasantha)")
-        assertEquals("DAE-4217 (Lasantha)", viewModel.getEffectiveVehicleNumber())
+        // Select DAE-4717 (Lasantha)
+        viewModel.setSelectedVehicleOption("DAE-4717 (Lasantha)")
+        assertEquals("DAE-4717 (Lasantha)", viewModel.getEffectiveVehicleNumber())
         assertNull(viewModel.validateVehicleReady())
 
         // Select Pick Me and type vehicle number
@@ -82,27 +82,27 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `vehicle selection maps DAC-4912 and DAE-4217 to exact Supabase profile UUIDs without showing UUID in UI summary`() {
+    fun `vehicle selection maps DAC-4912 and DAE-4717 to exact Supabase profile UUIDs without showing UUID in UI summary`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = DispatchViewModel(app)
 
-        // 1. DAC-4912 (Rathnayake) -> de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56
+        // 1. DAC-4912 (Rathnayake) -> 574e0364-858b-43e8-bf5f-5f09fc7e30cf
         viewModel.setSelectedVehicleOption("DAC-4912 (Rathnayake)")
         assertEquals(
-            "de7a7b6c-92db-4fe7-82d6-2f2cda9e8a56",
+            "574e0364-858b-43e8-bf5f-5f09fc7e30cf",
             viewModel.getAssignedDriverUuid()
         )
         assertEquals("GATE PASS assigns driver Rathnayake", viewModel.getAssignedDeliverySummary())
-        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("de7a7b6c"))
+        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("574e0364"))
 
-        // 2. DAE-4217 (Lasantha) -> 0c940655-4963-4036-ae66-4a889f9d368f
-        viewModel.setSelectedVehicleOption("DAE-4217 (Lasantha)")
+        // 2. DAE-4717 (Lasantha) -> 149a7d44-326a-48fe-b970-8ac196352779
+        viewModel.setSelectedVehicleOption("DAE-4717 (Lasantha)")
         assertEquals(
-            "0c940655-4963-4036-ae66-4a889f9d368f",
+            "149a7d44-326a-48fe-b970-8ac196352779",
             viewModel.getAssignedDriverUuid()
         )
         assertEquals("GATE PASS assigns driver Lasantha", viewModel.getAssignedDeliverySummary())
-        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("0c940655"))
+        org.junit.Assert.assertFalse(viewModel.getAssignedDeliverySummary().contains("149a7d44"))
 
         // 3. Pick Me -> delivery option assigned to Pick Me (CAA-8910)
         viewModel.setSelectedVehicleOption("Pick Me")
@@ -190,7 +190,7 @@ class ExampleRobolectricTest {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = DispatchViewModel(app)
         viewModel.setMode(OperationMode.DISPATCH)
-        viewModel.setSelectedVehicleOption("DAE-4217 (Lasantha)")
+        viewModel.setSelectedVehicleOption("DAE-4717 (Lasantha)")
 
         val qr3535 = """{"orderNo":"3535","customer":"kalana ","district":"Kandy","deliveryType":"non-courier","salesPerson":"Niyana Furniture","copy":"GATE PASS","totalUnits":3,"size":"30x60","topColour":"teak","frameColour":"black","qty":1,"legSize":"1.5x1.5","legShape":"O Shape","legHeight":"30"}"""
         viewModel.onQrScanned(qr3535, app)
